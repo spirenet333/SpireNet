@@ -1,0 +1,3787 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>spirenet</title>
+<style>
+:root{
+  --bg:#000;
+  --text:#fff;
+  --dim:rgba(255,255,255,0.65);
+}
+@media (prefers-color-scheme: light){
+  :root{
+    --bg:#e6e6e6;
+    --text:#000;
+    --dim:rgba(0,0,0,0.65);
+  }
+}
+html,body{
+  height:100%;
+  margin:0;
+  background:var(--bg);
+  color:var(--text);
+  font-family:menlo,monospace;
+  font-size:12px;
+  overflow:hidden;
+}
+#terminal{
+  position:fixed;
+  inset:0;
+  padding:12px;
+  overflow-y:auto;
+  white-space:pre-wrap;
+  -webkit-overflow-scrolling:touch;
+}
+#tapCatcher{
+  position:fixed;
+  inset:0;
+  background:transparent;
+}
+#hint{
+  position:fixed;
+  left:12px;
+  bottom:12px;
+  opacity:0.65;
+  pointer-events:none;
+  user-select:none;
+  color:var(--dim);
+}
+#hiddenInput{
+  position:fixed;
+  left:8px;
+  bottom:8px;
+  width:10px;
+  height:10px;
+  opacity:0;
+  background:transparent;
+  color:transparent;
+  border:0;
+  outline:0;
+  caret-color:transparent;
+  -webkit-text-fill-color:transparent;
+}
+</style>
+</head>
+<body>
+<div id="terminal"></div>
+<div id="tapCatcher" aria-hidden="true"></div>
+<div id="hint">tap to type</div>
+<input id="hiddenInput" type="text" autocapitalize="none" autocomplete="off" autocorrect="off" spellcheck="false" inputmode="text">
+
+<script>
+const APP_NAME = "spirenet";
+const ADMIN_PASSWORD = "16:34:20-stayputandoutoftheway8mv65qryop@";
+const DB_NAME = "spirenet_cli_db_v2";
+const DB_VERSION = 1;
+
+const terminal = document.getElementById("terminal");
+const input = document.getElementById("hiddenInput");
+const tap = document.getElementById("tapCatcher");
+const hint = document.getElementById("hint");
+
+function lc(s){ return (s ?? "").toString().toLowerCase(); }
+function nowIso(){ return new Date().toISOString(); }
+function safeName(s){ return /^[a-z0-9_-]+$/.test(s); }
+function escapeHtml(s){
+  return (s ?? "").toString()
+    .replaceAll("&","&amp;")
+    .replaceAll("<","&lt;")
+    .replaceAll(">","&gt;");
+}
+function addLine(s){ state.transcript.push(lc(s)); }
+function addPromptEcho(s){ state.transcript.push("> " + lc(s)); }
+
+function render(){
+  terminal.textContent = state.transcript.join("\n") + "\n> " + state.current + "_";
+  terminal.scrollTop = terminal.scrollHeight;
+}
+
+function focusInput(){
+  input.focus();
+  setTimeout(()=>input.focus(), 30);
+  setTimeout(()=>input.focus(), 120);
+  setTimeout(()=>{
+    if(document.activeElement === input) hint.style.display = "none";
+  }, 80);
+}
+
+tap.addEventListener("touchstart", focusInput, {passive:true});
+tap.addEventListener("pointerdown", focusInput, {passive:true});
+terminal.addEventListener("touchstart", focusInput, {passive:true});
+terminal.addEventListener("pointerdown", focusInput, {passive:true});
+document.addEventListener("visibilitychange", ()=>{
+  if(!document.hidden) setTimeout(focusInput, 150);
+});
+
+input.addEventListener("input", ()=>{
+  state.current = lc(input.value);
+  if(input.value !== state.current) input.value = state.current;
+  render();
+});
+
+input.addEventListener("keydown", (e)=>{
+  if(e.key === "Enter"){
+    e.preventDefault();
+    const line = lc(state.current);
+    state.current = "";
+    input.value = "";
+    if(line.trim().length){
+      addPromptEcho(line);
+      handleLine(line);
+    }
+    render();
+  }
+});
+
+/* =========================
+   indexeddb
+========================= */
+function openDB(){
+  return new Promise((resolve,reject)=>{
+    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    req.onupgradeneeded = ()=>{
+      const db = req.result;
+      if(!db.objectStoreNames.contains("kv")) db.createObjectStore("kv");
+    };
+    req.onsuccess = ()=> resolve(req.result);
+    req.onerror = ()=> reject(req.error);
+  });
+}
+
+async function kvGet(key){
+  const db = await openDB();
+  return new Promise((resolve,reject)=>{
+    const tx = db.transaction("kv","readonly");
+    const st = tx.objectStore("kv");
+    const r = st.get(key);
+    r.onsuccess = ()=> resolve(r.result);
+    r.onerror = ()=> reject(r.error);
+  });
+}
+
+async function kvSet(key,val){
+  const db = await openDB();
+  return new Promise((resolve,reject)=>{
+    const tx = db.transaction("kv","readwrite");
+    const st = tx.objectStore("kv");
+    const r = st.put(val,key);
+    r.onsuccess = ()=> resolve(true);
+    r.onerror = ()=> reject(r.error);
+  });
+}
+
+/* =========================
+   state
+========================= */
+const state = {
+  transcript: [],
+  current: "",
+  sessionStartIndex: 0,
+
+  phase: "boot", // boot, gate, cli
+  gateMode: null, // choose, login_user, login_pass, create_admin, create_user, create_pass
+  pendingUsername: "",
+
+  currentUser: null,
+  adminUnlocked: false,
+
+  rootId: null,
+  cwdId: null,
+  cwdPath: "/spirenet",
+
+  activeFileId: null,
+  activeFileName: null,
+
+  nodes: [],
+  forms: [],
+  submissions: [],
+
+  currentAnswers: {},
+  currentFormInfo: null,
+  wizard: null,
+  edit: null,
+
+  users: []
+};
+
+/* =========================
+   helpers
+========================= */
+function splitCmd(line){
+  const t = line.trim();
+  if(!t) return {cmd:"", args:[]};
+  const parts = t.split(" ");
+  return {cmd: parts[0], args: parts.slice(1)};
+}
+function joinRest(args){ return args.join(" ").trim(); }
+
+function nodeById(id){ return state.nodes.find(n=>n.id===id) || null; }
+
+function childrenOf(dirId){
+  return state.nodes
+    .filter(n=>n.parentId===dirId)
+    .sort((a,b)=>{
+      if(a.type !== b.type) return a.type === "dir" ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+}
+
+function visibleChildrenOf(dirId){
+  return childrenOf(dirId).filter(n=>{
+    if(pathOf(dirId) === "/spirenet" && n.name === "admin" && !state.adminUnlocked) return false;
+    return true;
+  });
+}
+
+function childByName(dirId,name){
+  return state.nodes.find(n=>n.parentId===dirId && n.name===name) || null;
+}
+
+function pathOf(id){
+  const n = nodeById(id);
+  if(!n) return "/spirenet";
+  if(n.id === state.rootId) return "/spirenet";
+  let parts = [];
+  let cur = n;
+  while(cur && cur.parentId){
+    parts.push(cur.name);
+    cur = nodeById(cur.parentId);
+    if(cur && cur.id === state.rootId) break;
+  }
+  return "/spirenet/" + parts.reverse().join("/");
+}
+
+function normalizePath(raw){
+  raw = lc(raw).replaceAll("\\","/");
+  while(raw.includes("//")) raw = raw.replaceAll("//","/");
+  if(raw.length > 1 && raw.endsWith("/")) raw = raw.slice(0,-1);
+  return raw;
+}
+
+function resolvePath(fromDirId, raw){
+  raw = normalizePath(raw);
+  if(raw === "" || raw === ".") return {ok:true,id:fromDirId};
+  if(raw === "/" || raw === "/spirenet") return {ok:true,id:state.rootId};
+
+  let working = raw;
+  let startId = fromDirId;
+
+  if(working.startsWith("/spirenet")){
+    startId = state.rootId;
+    working = working.slice("/spirenet".length);
+    if(working === "") return {ok:true,id:state.rootId};
+  } else if(working.startsWith("/")){
+    startId = state.rootId;
+    working = working.slice(1);
+  }
+
+  const parts = working.split("/").filter(Boolean);
+  let curId = startId;
+
+  for(const part of parts){
+    if(part === ".") continue;
+    if(part === ".."){
+      const cur = nodeById(curId);
+      if(cur && cur.parentId) curId = cur.parentId;
+      continue;
+    }
+    const child = childByName(curId, part);
+    if(!child) return {ok:false, err:`not found: ${raw}`};
+    curId = child.id;
+  }
+  return {ok:true,id:curId};
+}
+
+/* =========================
+   forms
+========================= */
+function formForDirCompleted(dirId){
+  return state.forms.find(f=>f.dirId===dirId && f.status==="completed") || null;
+}
+function formForDirDraft(dirId){
+  return state.forms.find(f=>f.dirId===dirId && f.status==="draft") || null;
+}
+function versionForForm(name, questions){
+  const s = name + "::" + questions.join("||");
+  let h = 0;
+  for(let i=0;i<s.length;i++) h = (h*31 + s.charCodeAt(i)) >>> 0;
+  return "v" + h.toString(16);
+}
+function emitFormInfoIfAny(dirId){
+  const f = formForDirCompleted(dirId);
+  if(!f){
+    state.currentFormInfo = null;
+    state.currentAnswers = {};
+    return;
+  }
+  state.currentFormInfo = {name:f.name, questions:f.questions, version:f.version};
+  state.currentAnswers = {};
+  addLine(`form detected: ${f.name}`);
+  f.questions.forEach((q,i)=> addLine(`q${i+1}: ${q}`));
+  addLine("fill: answer <q#> <text>");
+  addLine("then: submit");
+  addLine("other: clearanswers, submissions, view <id>");
+}
+
+/* =========================
+   preview table rendering
+========================= */
+function renderTables(text){
+  const lines = (text ?? "").split("\n");
+  let out = [];
+  let inTbl = false;
+  let tbl = [];
+
+  function flushTbl(){
+    if(tbl.length===0) return;
+    const rows = tbl.map(l=>l.split("|").map(c=>c.trim()));
+    const cols = Math.max(...rows.map(r=>r.length), 0);
+    const widths = new Array(cols).fill(0);
+    rows.forEach(r=>{
+      for(let i=0;i<cols;i++){
+        const v = r[i] ?? "";
+        widths[i] = Math.max(widths[i], v.length);
+      }
+    });
+    rows.forEach(r=>{
+      const line = r.map((v,i)=>(v ?? "").padEnd(widths[i], " ")).join(" | ");
+      out.push(line);
+    });
+    tbl = [];
+  }
+
+  for(const l of lines){
+    const s = lc(l).trim();
+    if(s.includes("{writetbl}")){
+      inTbl = true;
+      out.push("");
+      out.push("");
+      continue;
+    }
+    if(s.includes("{endtbl}")){
+      inTbl = false;
+      flushTbl();
+      continue;
+    }
+    if(inTbl){
+      tbl.push(lc(l));
+    } else {
+      out.push(lc(l));
+    }
+  }
+  if(inTbl) flushTbl();
+  return out.join("\n");
+}
+
+/* =========================
+   persistence
+========================= */
+function syncAdminFiles(){
+  const adminDir = state.nodes.find(n=>n.parentId===state.rootId && n.name==="admin" && n.type==="dir");
+  if(!adminDir) return;
+
+  let usersFile = state.nodes.find(n=>n.parentId===adminDir.id && n.name==="admin_users" && n.type==="file");
+  let loginFile = state.nodes.find(n=>n.parentId===adminDir.id && n.name==="admin_login" && n.type==="file");
+
+  if(!usersFile){
+    usersFile = {id:crypto.randomUUID(), parentId:adminDir.id, name:"admin_users", type:"file", content:"", createdAt:nowIso()};
+    state.nodes.push(usersFile);
+  }
+  if(!loginFile){
+    loginFile = {id:crypto.randomUUID(), parentId:adminDir.id, name:"admin_login", type:"file", content:ADMIN_PASSWORD, createdAt:nowIso()};
+    state.nodes.push(loginFile);
+  }
+
+  usersFile.content = state.users.map(u=>`${u.username} | ${u.password} | ${u.createdAt}`).join("\n");
+  loginFile.content = ADMIN_PASSWORD;
+}
+
+async function saveAll(){
+  syncAdminFiles();
+  await kvSet("spirenet_state", {
+    users: state.users,
+    currentUser: state.currentUser,
+    rootId: state.rootId,
+    cwdId: state.cwdId,
+    activeFileId: state.activeFileId,
+    activeFileName: state.activeFileName,
+    nodes: state.nodes,
+    forms: state.forms,
+    submissions: state.submissions
+  });
+}
+
+async function loadAll(){
+  const saved = await kvGet("spirenet_state");
+  if(saved && saved.nodes){
+    state.users = saved.users || [];
+    state.currentUser = saved.currentUser || null;
+    state.rootId = saved.rootId;
+    state.cwdId = saved.cwdId;
+    state.activeFileId = saved.activeFileId ?? null;
+    state.activeFileName = saved.activeFileName ?? null;
+    state.nodes = saved.nodes || [];
+    state.forms = saved.forms || [];
+    state.submissions = saved.submissions || [];
+    state.cwdPath = pathOf(state.cwdId || state.rootId) || "/spirenet";
+    syncAdminFiles();
+    return;
+  }
+
+  // seed filesystem
+  const root = {id:crypto.randomUUID(), parentId:null, name:"spirenet", type:"dir", content:null, createdAt:nowIso()};
+  const admin = {id:crypto.randomUUID(), parentId:root.id, name:"admin", type:"dir", content:null, createdAt:nowIso()};
+  const net = {id:crypto.randomUUID(), parentId:root.id, name:"net", type:"dir", content:null, createdAt:nowIso()};
+  const job = {id:crypto.randomUUID(), parentId:root.id, name:"job", type:"dir", content:null, createdAt:nowIso()};
+  const adminUsers = {id:crypto.randomUUID(), parentId:admin.id, name:"admin_users", type:"file", content:"", createdAt:nowIso()};
+  const adminLogin = {id:crypto.randomUUID(), parentId:admin.id, name:"admin_login", type:"file", content:ADMIN_PASSWORD, createdAt:nowIso()};
+
+  state.nodes = [root, admin, net, job, adminUsers, adminLogin];
+
+  const letters = "abcdefghijklmnopqrstuvwxyz".split("");
+  for(const letter1 of letters){
+    const level1 = {
+      id: crypto.randomUUID(),
+      parentId: net.id,
+      name: letter1,
+      type: "dir",
+      content: null,
+      createdAt: nowIso()
+    };
+    state.nodes.push(level1);
+
+    for(const letter2 of letters){
+      const level2 = {
+        id: crypto.randomUUID(),
+        parentId: level1.id,
+        name: letter2,
+        type: "dir",
+        content: null,
+        createdAt: nowIso()
+      };
+      state.nodes.push(level2);
+    }
+  }
+
+  state.rootId = root.id;
+  state.cwdId = root.id;
+  state.cwdPath = "/spirenet";
+  state.activeFileId = null;
+  state.activeFileName = null;
+  state.forms = [];
+  state.submissions = [];
+  state.users = [];
+  syncAdminFiles();
+  await saveAll();
+}
+
+/* =========================
+   auth helpers
+========================= */
+function userExists(username){
+  return state.users.some(u=>u.username===username);
+}
+function userRecord(username){
+  return state.users.find(u=>u.username===username) || null;
+}
+
+/* =========================
+   command docs
+========================= */
+const COMMANDS = [
+  ["commandls","list all commands"],
+  ["cmmdhelp","describe commands + usage"],
+  ["pwd","show current directory"],
+  ["whoami","show current user"],
+  ["ls","list directories/files in cwd"],
+  ["cd <path>","change directory (/, .., relative, absolute)"],
+  ["mkdir <name>","create directory in cwd"],
+  ["touch <filename>","create empty file in cwd"],
+  ["rm <name>","delete file or empty dir"],
+  ["mv <source> <dest>","move/rename file or dir"],
+  ["cat <filename>","show file contents"],
+  ["write <filename> <text...>","overwrite file with text"],
+  ["append <filename> <text...>","append newline + text"],
+  ["open <filename>","set active file for printpg"],
+  ["edit <filename>","enter edit mode"],
+  ["done","exit edit mode + save"],
+  ["cancel","exit edit mode without saving"],
+  ["preview <filename>","show rendered table view"],
+  ["print","reprint full session transcript"],
+  ["printpg","print user/cwd/file/file view"],
+  ["entry directory","start form wizard for current directory"],
+  ["complete form","complete form draft"],
+  ["cancelform","discard draft form"],
+  ["answer <q#> <text...>","answer form question"],
+  ["clearanswers","clear form answers"],
+  ["submit","save completed form submission"],
+  ["submissions","list saved submissions"],
+  ["view <id>","view saved submission"],
+  ["adminauth <password>","unlock admin folder barrier"],
+  ["logout","return to login gate"],
+  ["clear","clear terminal display"]
+];
+
+/* =========================
+   gate flow
+========================= */
+function handleGateLine(line){
+  const t = lc(line).trim();
+
+  if(state.gateMode === "choose"){
+    if(t === "login"){
+      state.gateMode = "login_user";
+      addLine("username?");
+      return;
+    }
+    if(t === "create login"){
+      state.gateMode = "create_admin";
+      addLine("admin password?");
+      return;
+    }
+    addLine('type "login" or "create login"');
+    return;
+  }
+
+  if(state.gateMode === "login_user"){
+    if(!userExists(t)){
+      addLine("username not found");
+      addLine("username?");
+      return;
+    }
+    state.pendingUsername = t;
+    state.gateMode = "login_pass";
+    addLine("password?");
+    return;
+  }
+
+  if(state.gateMode === "login_pass"){
+    const u = userRecord(state.pendingUsername);
+    if(!u || u.password !== t){
+      addLine("invalid password");
+      state.pendingUsername = "";
+      state.gateMode = "choose";
+      addLine('type "login" or "create login"');
+      return;
+    }
+    state.currentUser = u.username;
+    state.phase = "cli";
+    state.gateMode = null;
+    state.pendingUsername = "";
+    saveAll();
+    enterCli();
+    return;
+  }
+
+  if(state.gateMode === "create_admin"){
+    if(t !== ADMIN_PASSWORD){
+      addLine("admin password invalid");
+      state.gateMode = "choose";
+      addLine('type "login" or "create login"');
+      return;
+    }
+    state.gateMode = "create_user";
+    addLine("new username?");
+    return;
+  }
+
+  if(state.gateMode === "create_user"){
+    if(!safeName(t)){
+      addLine("invalid username (use letters, numbers, dash, underscore)");
+      addLine("new username?");
+      return;
+    }
+    if(userExists(t)){
+      addLine("username already exists");
+      addLine("new username?");
+      return;
+    }
+    state.pendingUsername = t;
+    state.gateMode = "create_pass";
+    addLine("new password?");
+    return;
+  }
+
+  if(state.gateMode === "create_pass"){
+    if(!t){
+      addLine("new password?");
+      return;
+    }
+    state.users.push({
+      username: state.pendingUsername,
+      password: t,
+      createdAt: nowIso()
+    });
+    saveAll();
+    addLine("login created");
+    state.pendingUsername = "";
+    state.gateMode = "choose";
+    addLine('type "login" or "create login"');
+  }
+}
+
+function enterCli(){
+  state.cwdId = state.rootId;
+  state.cwdPath = "/spirenet";
+  state.adminUnlocked = false;
+  addLine(`${APP_NAME} ready`);
+  addLine(`user: ${state.currentUser}`);
+  addLine("directories visible:");
+  addLine("dir net");
+  addLine("dir job");
+}
+
+/* =========================
+   edit mode
+========================= */
+function handleEditLine(line){
+  const t = lc(line).trim();
+
+  if(t === "done"){
+    const file = nodeById(state.edit.fileId);
+    if(file && file.type==="file"){
+      file.content = state.edit.bufferLines.join("\n");
+      saveAll();
+      addLine("saved");
+    } else {
+      addLine("error: file missing");
+    }
+    state.edit = null;
+    return;
+  }
+
+  if(t === "cancel"){
+    state.edit = null;
+    addLine("canceled");
+    return;
+  }
+
+  if(t.includes("{writetbl}")){
+    state.edit.bufferLines.push("{writetbl}");
+    state.edit.inTable = true;
+    addLine("(table mode: type rows like: name | age | id. then {endtbl})");
+    return;
+  }
+
+  if(t.includes("{endtbl}")){
+    state.edit.bufferLines.push("{endtbl}");
+    state.edit.inTable = false;
+    addLine("(table ended)");
+    return;
+  }
+
+  state.edit.bufferLines.push(line);
+}
+
+/* =========================
+   form wizard
+========================= */
+function handleWizardLine(line){
+  const t = lc(line).trim();
+
+  if(state.wizard.mode === "formname"){
+    if(!t){
+      addLine("form name?");
+      return;
+    }
+    state.wizard.name = t;
+    state.wizard.mode = "questions";
+    addLine("add question (or type done)?");
+    return;
+  }
+
+  if(state.wizard.mode === "questions"){
+    if(t === "done"){
+      if(state.wizard.questions.length === 0){
+        addLine("error: add at least one question");
+        addLine("add question (or type done)?");
+        return;
+      }
+      state.forms.push({
+        dirId: state.wizard.dirId,
+        status: "draft",
+        name: state.wizard.name,
+        questions: state.wizard.questions.slice(),
+        version: "",
+        createdAt: nowIso()
+      });
+      state.wizard = null;
+      saveAll();
+      addLine("draft saved. run: complete form");
+      return;
+    }
+    if(!t){
+      addLine("add question (or type done)?");
+      return;
+    }
+    state.wizard.questions.push(t);
+    addLine("add question (or type done)?");
+  }
+}
+
+/* =========================
+   cli
+========================= */
+function handleCliLine(line){
+  if(state.edit){
+    handleEditLine(line);
+    return;
+  }
+
+  if(state.wizard){
+    handleWizardLine(line);
+    return;
+  }
+
+  const {cmd,args} = splitCmd(line);
+
+  if(cmd === "commandls"){
+    addLine("commands:");
+    COMMANDS.forEach(c=> addLine(c[0]));
+    return;
+  }
+
+  if(cmd === "cmmdhelp"){
+    addLine("command descriptions:");
+    COMMANDS.forEach(([k,d])=> addLine(`${k} : ${d}`));
+    return;
+  }
+
+  if(cmd === "clear"){
+    state.transcript = [];
+    addLine("cleared");
+    return;
+  }
+
+  if(cmd === "logout"){
+    state.phase = "gate";
+    state.gateMode = "choose";
+    state.currentUser = null;
+    state.adminUnlocked = false;
+    state.edit = null;
+    state.wizard = null;
+    saveAll();
+    addLine("logged out");
+    addLine('type "login" or "create login"');
+    return;
+  }
+
+  if(line.startsWith("adminauth ")){
+    const pw = line.slice("adminauth ".length).trim();
+    if(pw === ADMIN_PASSWORD){
+      state.adminUnlocked = true;
+      addLine("admin barrier unlocked");
+    } else {
+      addLine("invalid admin password");
+    }
+    return;
+  }
+
+  if(cmd === "adminauth"){
+    addLine("enter admin password with: adminauth <password>");
+    return;
+  }
+
+  if(cmd === "whoami"){
+    addLine(state.currentUser || "");
+    return;
+  }
+
+  if(cmd === "pwd"){
+    addLine(state.cwdPath);
+    return;
+  }
+
+  if(cmd === "ls"){
+    const kids = visibleChildrenOf(state.cwdId);
+    const dirs = kids.filter(n=>n.type==="dir");
+    const files = kids.filter(n=>n.type==="file");
+    if(dirs.length===0 && files.length===0){
+      addLine("(empty)");
+      return;
+    }
+    dirs.forEach(d=> addLine("dir " + d.name));
+    files.forEach(f=> addLine("file " + f.name));
+    return;
+  }
+
+  if(cmd === "cd"){
+    if(args.length < 1){
+      addLine("error: missing path");
+      return;
+    }
+    const target = resolvePath(state.cwdId, args[0]);
+    if(!target.ok){
+      addLine("error: " + target.err);
+      return;
+    }
+    const n = nodeById(target.id);
+    if(!n || n.type!=="dir"){
+      addLine("error: not a directory");
+      return;
+    }
+    if(pathOf(n.id) === "/spirenet/admin" && !state.adminUnlocked){
+      addLine("error: admin barrier locked");
+      return;
+    }
+    state.cwdId = n.id;
+    state.cwdPath = pathOf(n.id);
+    saveAll();
+    addLine(state.cwdPath);
+    emitFormInfoIfAny(state.cwdId);
+    return;
+  }
+
+  if(cmd === "mkdir"){
+    if(args.length < 1){
+      addLine("error: missing name");
+      return;
+    }
+    const name = args[0];
+    if(!safeName(name)){
+      addLine("error: invalid name (use letters, numbers, dash, underscore)");
+      return;
+    }
+    if(childByName(state.cwdId, name)){
+      addLine("error: already exists");
+      return;
+    }
+    state.nodes.push({id:crypto.randomUUID(), parentId:state.cwdId, name, type:"dir", content:null, createdAt:nowIso()});
+    saveAll();
+    addLine("ok");
+    return;
+  }
+
+  if(cmd === "touch"){
+    if(args.length < 1){
+      addLine("error: missing filename");
+      return;
+    }
+    const name = args[0];
+    if(!safeName(name)){
+      addLine("error: invalid filename (use letters, numbers, dash, underscore)");
+      return;
+    }
+    if(childByName(state.cwdId, name)){
+      addLine("error: already exists");
+      return;
+    }
+    state.nodes.push({id:crypto.randomUUID(), parentId:state.cwdId, name, type:"file", content:"", createdAt:nowIso()});
+    saveAll();
+    addLine("ok");
+    return;
+  }
+
+  if(cmd === "rm"){
+    if(args.length < 1){
+      addLine("error: missing name");
+      return;
+    }
+    const n = childByName(state.cwdId, args[0]);
+    if(!n){
+      addLine("not found");
+      return;
+    }
+    if(n.type==="dir"){
+      const kids = childrenOf(n.id);
+      if(kids.length>0){
+        addLine("error: directory not empty");
+        return;
+      }
+    }
+    if(state.activeFileId === n.id){
+      state.activeFileId = null;
+      state.activeFileName = null;
+    }
+    state.nodes = state.nodes.filter(x=>x.id!==n.id);
+    if(n.type==="dir"){
+      state.forms = state.forms.filter(f=>f.dirId!==n.id);
+      state.submissions = state.submissions.filter(s=>s.dirId!==n.id);
+    }
+    saveAll();
+    addLine("ok");
+    return;
+  }
+
+  if(cmd === "mv"){
+    if(args.length < 2){
+      addLine("error: mv <source> <dest>");
+      return;
+    }
+    const srcRes = resolvePath(state.cwdId, args[0]);
+    if(!srcRes.ok){
+      addLine("error: " + srcRes.err);
+      return;
+    }
+    const srcNode = nodeById(srcRes.id);
+    if(!srcNode || srcNode.id===state.rootId){
+      addLine("error: invalid source");
+      return;
+    }
+
+    const dstRes = resolvePath(state.cwdId, args[1]);
+    if(dstRes.ok){
+      const dstNode = nodeById(dstRes.id);
+      if(dstNode && dstNode.type==="dir"){
+        if(pathOf(dstNode.id) === "/spirenet/admin" && !state.adminUnlocked){
+          addLine("error: admin barrier locked");
+          return;
+        }
+        if(childByName(dstNode.id, srcNode.name)){
+          addLine("error: name conflict");
+          return;
+        }
+        srcNode.parentId = dstNode.id;
+        saveAll();
+        addLine("ok");
+        return;
+      }
+    }
+
+    const dp = normalizePath(args[1]);
+    const parts = dp.replace(/^\/spirenet/,"").replace(/^\//,"").split("/").filter(Boolean);
+    if(parts.length===0){
+      addLine("error: invalid dest");
+      return;
+    }
+    const newName = parts[parts.length-1];
+    if(!safeName(newName)){
+      addLine("error: invalid name");
+      return;
+    }
+    const parentPathRaw = parts.slice(0,-1).join("/");
+    const parentRes = parentPathRaw ? resolvePath(state.cwdId, parentPathRaw) : {ok:true,id:state.cwdId};
+    if(!parentRes.ok){
+      addLine("error: invalid dest path");
+      return;
+    }
+    const parentNode = nodeById(parentRes.id);
+    if(!parentNode || parentNode.type!=="dir"){
+      addLine("error: invalid dest directory");
+      return;
+    }
+    if(pathOf(parentNode.id) === "/spirenet/admin" && !state.adminUnlocked){
+      addLine("error: admin barrier locked");
+      return;
+    }
+    if(childByName(parentNode.id,newName)){
+      addLine("error: name conflict");
+      return;
+    }
+    srcNode.parentId = parentNode.id;
+    srcNode.name = newName;
+    saveAll();
+    addLine("ok");
+    return;
+  }
+
+  if(cmd === "cat"){
+    if(args.length < 1){
+      addLine("error: missing filename");
+      return;
+    }
+    const n = childByName(state.cwdId,args[0]);
+    if(!n || n.type!=="file"){
+      addLine("not found");
+      return;
+    }
+    addLine(n.content || "");
+    return;
+  }
+
+  if(cmd === "write"){
+    if(args.length < 2){
+      addLine("error: write <filename> <text...>");
+      return;
+    }
+    const n = childByName(state.cwdId,args[0]);
+    if(!n || n.type!=="file"){
+      addLine("not found");
+      return;
+    }
+    n.content = joinRest(args.slice(1));
+    saveAll();
+    addLine("ok");
+    return;
+  }
+
+  if(cmd === "append"){
+    if(args.length < 2){
+      addLine("error: append <filename> <text...>");
+      return;
+    }
+    const n = childByName(state.cwdId,args[0]);
+    if(!n || n.type!=="file"){
+      addLine("not found");
+      return;
+    }
+    const t = joinRest(args.slice(1));
+    n.content = (n.content || "") ? (n.content + "\n" + t) : t;
+    saveAll();
+    addLine("ok");
+    return;
+  }
+
+  if(cmd === "open"){
+    if(args.length < 1){
+      addLine("error: open <filename>");
+      return;
+    }
+    const n = childByName(state.cwdId,args[0]);
+    if(!n || n.type!=="file"){
+      addLine("not found");
+      return;
+    }
+    state.activeFileId = n.id;
+    state.activeFileName = n.name;
+    saveAll();
+    addLine("active file set");
+    return;
+  }
+
+  if(cmd === "edit"){
+    if(args.length < 1){
+      addLine("error: edit <filename>");
+      return;
+    }
+    const name = args[0];
+    let n = childByName(state.cwdId,name);
+    if(!n){
+      if(!safeName(name)){
+        addLine("error: invalid filename");
+        return;
+      }
+      n = {id:crypto.randomUUID(), parentId:state.cwdId, name, type:"file", content:"", createdAt:nowIso()};
+      state.nodes.push(n);
+      saveAll();
+      addLine("created file");
+    }
+    if(n.type!=="file"){
+      addLine("error: not a file");
+      return;
+    }
+
+    state.edit = {
+      fileId: n.id,
+      bufferLines: (n.content || "").split("\n"),
+      inTable:false,
+      tableLines:[]
+    };
+    state.activeFileId = n.id;
+    state.activeFileName = n.name;
+    saveAll();
+    addLine(`editing ${n.name}`);
+    addLine("type lines. use {writetbl} ... {endtbl} to insert a table.");
+    addLine("type done to save, cancel to discard.");
+    return;
+  }
+
+  if(cmd === "done" || cmd === "cancel"){
+    addLine("error: not in edit mode");
+    return;
+  }
+
+  if(cmd === "preview"){
+    if(args.length < 1){
+      addLine("error: preview <filename>");
+      return;
+    }
+    const n = childByName(state.cwdId,args[0]);
+    if(!n || n.type!=="file"){
+      addLine("not found");
+      return;
+    }
+    addLine("preview:");
+    addLine(renderTables(n.content || ""));
+    return;
+  }
+
+  if(cmd === "print"){
+    const slice = state.transcript.slice(state.sessionStartIndex);
+    slice.forEach(l=> state.transcript.push(l));
+    addLine("(printed transcript)");
+    return;
+  }
+
+  if(cmd === "printpg"){
+    const cwd = state.cwdPath;
+    const fileName = state.activeFileName || "(none)";
+    let fileView = "";
+    if(state.activeFileId){
+      const n = nodeById(state.activeFileId);
+      if(n && n.type==="file") fileView = renderTables(n.content || "");
+    }
+
+    const printText =
+`print page
+
+user: ${state.currentUser || ""}
+cwd: ${cwd}
+file: ${fileName}
+
+file view:
+${fileView}
+`;
+
+    const safe = escapeHtml(printText);
+    const html = `<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>print</title>
+<style>
+body{font-family:menlo,monospace;font-size:12px;margin:40px;color:#000;background:#fff;}
+pre{white-space:pre-wrap;word-wrap:break-word;overflow-wrap:anywhere;font-family:menlo,monospace;font-size:12px;}
+</style>
+</head><body>
+<pre>${safe}</pre>
+<script>setTimeout(()=>{window.print()},400)<\/script>
+</body></html>`;
+
+    const blob = new Blob([html], {type:"text/html"});
+    const url = URL.createObjectURL(blob);
+    window.open(url, "_blank");
+    addLine("print ready");
+    return;
+  }
+
+  if(cmd === "entry" && args[0]==="directory"){
+    if(formForDirCompleted(state.cwdId)){
+      addLine("error: form already completed in this directory");
+      return;
+    }
+    if(formForDirDraft(state.cwdId)){
+      addLine("error: draft already exists. use complete form or cancelform");
+      return;
+    }
+    state.wizard = {mode:"formname", dirId: state.cwdId, name:"", questions:[]};
+    addLine("form name?");
+    return;
+  }
+
+  if(cmd === "complete" && args[0]==="form"){
+    const d = formForDirDraft(state.cwdId);
+    if(!d){
+      addLine("error: no draft form in this directory");
+      return;
+    }
+    if(!d.name || d.questions.length===0){
+      addLine("error: draft incomplete");
+      return;
+    }
+    d.status = "completed";
+    d.version = versionForForm(d.name, d.questions);
+    saveAll();
+    addLine("form completed");
+    emitFormInfoIfAny(state.cwdId);
+    return;
+  }
+
+  if(cmd === "cancelform"){
+    const d = formForDirDraft(state.cwdId);
+    if(!d){
+      addLine("error: no draft form");
+      return;
+    }
+    state.forms = state.forms.filter(f=>!(f.dirId===state.cwdId && f.status==="draft"));
+    state.wizard = null;
+    saveAll();
+    addLine("draft discarded");
+    return;
+  }
+
+  if(cmd === "answer"){
+    if(args.length < 2){
+      addLine("error: answer <q#> <text...>");
+      return;
+    }
+    const f = formForDirCompleted(state.cwdId);
+    if(!f){
+      addLine("error: no completed form in this directory");
+      return;
+    }
+    const qn = parseInt(args[0].replace("q",""),10);
+    if(!Number.isFinite(qn) || qn<1 || qn>f.questions.length){
+      addLine("error: invalid question number");
+      return;
+    }
+    state.currentAnswers[qn] = joinRest(args.slice(1));
+    addLine(`ok (q${qn})`);
+    return;
+  }
+
+  if(cmd === "clearanswers"){
+    state.currentAnswers = {};
+    addLine("ok");
+    return;
+  }
+
+  if(cmd === "submit"){
+    const f = formForDirCompleted(state.cwdId);
+    if(!f){
+      addLine("error: no completed form in this directory");
+      return;
+    }
+    for(let i=1;i<=f.questions.length;i++){
+      if(!state.currentAnswers[i] || state.currentAnswers[i].trim()===""){
+        addLine(`error: missing answer q${i}`);
+        return;
+      }
+    }
+    const id = crypto.randomUUID().slice(0,8);
+    const answers = {};
+    for(let i=1;i<=f.questions.length;i++) answers["q"+i] = state.currentAnswers[i];
+    state.submissions.push({
+      id,
+      dirId: state.cwdId,
+      formVersion: f.version,
+      answers,
+      createdAt: nowIso()
+    });
+    state.currentAnswers = {};
+    saveAll();
+    addLine(`saved submission ${id}`);
+    return;
+  }
+
+  if(cmd === "submissions"){
+    const items = state.submissions.filter(s=>s.dirId===state.cwdId).slice(-20).reverse();
+    if(items.length===0){
+      addLine("(none)");
+      return;
+    }
+    items.forEach(s=> addLine(`${s.id} ${s.createdAt}`));
+    return;
+  }
+
+  if(cmd === "view"){
+    if(args.length < 1){
+      addLine("error: view <id>");
+      return;
+    }
+    const s = state.submissions.find(x=>x.id===args[0] && x.dirId===state.cwdId);
+    if(!s){
+      addLine("not found");
+      return;
+    }
+    const f = formForDirCompleted(state.cwdId);
+    const questions = f ? f.questions : [];
+    addLine(`submission ${s.id}`);
+    questions.forEach((q,i)=>{
+      addLine(`q${i+1}: ${q}`);
+      addLine(`${s.answers["q"+(i+1)] ?? ""}`);
+    });
+    return;
+  }
+
+  addLine("unknown command");
+}
+
+function handleLine(line){
+  if(state.phase === "gate"){
+    handleGateLine(line);
+    saveAll();
+    return;
+  }
+  handleCliLine(line);
+  saveAll();
+}
+
+/* =========================
+   boot
+========================= */
+(async function boot(){
+  await loadAll();
+
+  state.phase = "gate";
+  state.gateMode = "choose";
+  state.sessionStartIndex = state.transcript.length;
+
+  addLine("spirenet");
+  addLine('type "login" or "create login"');
+
+  render();
+  setTimeout(()=>{ try{ input.focus(); }catch(e){} }, 700);
+})();
+</script>
+</body>
+</html><!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>spirenet</title>
+<style>
+:root{
+  --bg:#000;
+  --text:#fff;
+  --dim:rgba(255,255,255,0.65);
+}
+@media (prefers-color-scheme: light){
+  :root{
+    --bg:#e6e6e6;
+    --text:#000;
+    --dim:rgba(0,0,0,0.65);
+  }
+}
+html,body{
+  height:100%;
+  margin:0;
+  background:var(--bg);
+  color:var(--text);
+  font-family:menlo,monospace;
+  font-size:12px;
+  overflow:hidden;
+}
+#terminal{
+  position:fixed;
+  inset:0;
+  padding:12px;
+  overflow-y:auto;
+  white-space:pre-wrap;
+  -webkit-overflow-scrolling:touch;
+}
+#tapCatcher{
+  position:fixed;
+  inset:0;
+  background:transparent;
+}
+#hint{
+  position:fixed;
+  left:12px;
+  bottom:12px;
+  opacity:0.65;
+  pointer-events:none;
+  user-select:none;
+  color:var(--dim);
+}
+#hiddenInput{
+  position:fixed;
+  left:8px;
+  bottom:8px;
+  width:10px;
+  height:10px;
+  opacity:0;
+  background:transparent;
+  color:transparent;
+  border:0;
+  outline:0;
+  caret-color:transparent;
+  -webkit-text-fill-color:transparent;
+}
+</style>
+</head>
+<body>
+<div id="terminal"></div>
+<div id="tapCatcher" aria-hidden="true"></div>
+<div id="hint">tap to type</div>
+<input id="hiddenInput" type="text" autocapitalize="none" autocomplete="off" autocorrect="off" spellcheck="false" inputmode="text">
+
+<script>
+const APP_NAME = "spirenet";
+const ADMIN_PASSWORD = "16:34:20-stayputandoutoftheway8mv65qryop@";
+const DB_NAME = "spirenet_cli_db";
+const DB_VERSION = 1;
+
+const terminal = document.getElementById("terminal");
+const input = document.getElementById("hiddenInput");
+const tap = document.getElementById("tapCatcher");
+const hint = document.getElementById("hint");
+
+function lc(s){ return (s ?? "").toString().toLowerCase(); }
+function nowIso(){ return new Date().toISOString(); }
+function safeName(s){ return /^[a-z0-9_-]+$/.test(s); }
+function addLine(s){ state.transcript.push(lc(s)); }
+function addPromptEcho(s){ state.transcript.push("> " + lc(s)); }
+function render(){
+  terminal.textContent = state.transcript.join("\n") + "\n> " + state.current + "_";
+  terminal.scrollTop = terminal.scrollHeight;
+}
+function focusInput(){
+  input.focus();
+  setTimeout(()=>input.focus(), 30);
+  setTimeout(()=>input.focus(), 120);
+  setTimeout(()=>{
+    if(document.activeElement === input) hint.style.display = "none";
+  }, 80);
+}
+
+tap.addEventListener("touchstart", focusInput, {passive:true});
+tap.addEventListener("pointerdown", focusInput, {passive:true});
+terminal.addEventListener("touchstart", focusInput, {passive:true});
+terminal.addEventListener("pointerdown", focusInput, {passive:true});
+document.addEventListener("visibilitychange", ()=>{
+  if(!document.hidden) setTimeout(focusInput, 150);
+});
+
+input.addEventListener("input", ()=>{
+  state.current = lc(input.value);
+  if(input.value !== state.current) input.value = state.current;
+  render();
+});
+
+input.addEventListener("keydown", (e)=>{
+  if(e.key === "Enter"){
+    e.preventDefault();
+    const line = lc(state.current);
+    state.current = "";
+    input.value = "";
+    if(line.trim().length){
+      addPromptEcho(line);
+      handleLine(line);
+    }
+    render();
+  }
+});
+
+function openDB(){
+  return new Promise((resolve,reject)=>{
+    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    req.onupgradeneeded = ()=>{
+      const db = req.result;
+      if(!db.objectStoreNames.contains("kv")) db.createObjectStore("kv");
+    };
+    req.onsuccess = ()=> resolve(req.result);
+    req.onerror = ()=> reject(req.error);
+  });
+}
+async function kvGet(key){
+  const db = await openDB();
+  return new Promise((resolve,reject)=>{
+    const tx = db.transaction("kv","readonly");
+    const st = tx.objectStore("kv");
+    const r = st.get(key);
+    r.onsuccess = ()=> resolve(r.result);
+    r.onerror = ()=> reject(r.error);
+  });
+}
+async function kvSet(key,val){
+  const db = await openDB();
+  return new Promise((resolve,reject)=>{
+    const tx = db.transaction("kv","readwrite");
+    const st = tx.objectStore("kv");
+    const r = st.put(val,key);
+    r.onsuccess = ()=> resolve(true);
+    r.onerror = ()=> reject(r.error);
+  });
+}
+
+const state = {
+  transcript: [],
+  current: "",
+  sessionStartIndex: 0,
+
+  phase: "boot", // boot, gate, cli
+  gateMode: null, // null, choose, login_user, login_pass, create_admin, create_user, create_pass
+  pendingUsername: "",
+
+  currentUser: null,
+  adminUnlocked: false,
+
+  rootId: null,
+  cwdId: null,
+  cwdPath: "/spirenet",
+
+  activeFileId: null,
+  activeFileName: null,
+
+  nodes: [],
+  forms: [],
+  submissions: [],
+
+  currentAnswers: {},
+  currentFormInfo: null,
+  wizard: null,
+  edit: null,
+
+  users: [] // {username,password,createdAt}
+};
+
+function splitCmd(line){
+  const t = line.trim();
+  if(!t) return {cmd:"", args:[]};
+  const parts = t.split(" ");
+  return {cmd: parts[0], args: parts.slice(1)};
+}
+function joinRest(args){ return args.join(" ").trim(); }
+
+function nodeById(id){ return state.nodes.find(n=>n.id===id) || null; }
+function childrenOf(dirId){
+  return state.nodes.filter(n=>n.parentId===dirId).sort((a,b)=>a.name.localeCompare(b.name));
+}
+function visibleChildrenOf(dirId){
+  return childrenOf(dirId).filter(n=>{
+    if(pathOf(dirId) === "/spirenet" && n.name === "admin" && !state.adminUnlocked) return false;
+    return true;
+  });
+}
+function childByName(dirId,name){
+  return state.nodes.find(n=>n.parentId===dirId && n.name===name) || null;
+}
+function pathOf(id){
+  const n = nodeById(id);
+  if(!n) return "/spirenet";
+  if(n.id === state.rootId) return "/spirenet";
+  let parts = [];
+  let cur = n;
+  while(cur && cur.parentId){
+    parts.push(cur.name);
+    cur = nodeById(cur.parentId);
+    if(cur && cur.id === state.rootId) break;
+  }
+  return "/spirenet/" + parts.reverse().join("/");
+}
+function normalizePath(raw){
+  raw = lc(raw).replaceAll("\\","/");
+  while(raw.includes("//")) raw = raw.replaceAll("//","/");
+  if(raw.length > 1 && raw.endsWith("/")) raw = raw.slice(0,-1);
+  return raw;
+}
+function resolvePath(fromDirId, raw){
+  raw = normalizePath(raw);
+  if(raw === "" || raw === ".") return {ok:true,id:fromDirId};
+  if(raw === "/" || raw === "/spirenet") return {ok:true,id:state.rootId};
+
+  let working = raw;
+  let startId = fromDirId;
+
+  if(working.startsWith("/spirenet")){
+    startId = state.rootId;
+    working = working.slice("/spirenet".length);
+    if(working === "") return {ok:true,id:state.rootId};
+  } else if(working.startsWith("/")){
+    startId = state.rootId;
+    working = working.slice(1);
+  }
+
+  const parts = working.split("/").filter(Boolean);
+  let curId = startId;
+
+  for(const part of parts){
+    if(part === ".") continue;
+    if(part === ".."){
+      const cur = nodeById(curId);
+      if(cur && cur.parentId) curId = cur.parentId;
+      continue;
+    }
+    const child = childByName(curId, part);
+    if(!child) return {ok:false, err:`not found: ${raw}`};
+    curId = child.id;
+  }
+  return {ok:true,id:curId};
+}
+
+function formForDirCompleted(dirId){
+  return state.forms.find(f=>f.dirId===dirId && f.status==="completed") || null;
+}
+function formForDirDraft(dirId){
+  return state.forms.find(f=>f.dirId===dirId && f.status==="draft") || null;
+}
+function versionForForm(name, questions){
+  const s = name + "::" + questions.join("||");
+  let h = 0;
+  for(let i=0;i<s.length;i++) h = (h*31 + s.charCodeAt(i)) >>> 0;
+  return "v" + h.toString(16);
+}
+
+function emitFormInfoIfAny(dirId){
+  const f = formForDirCompleted(dirId);
+  if(!f){
+    state.currentFormInfo = null;
+    state.currentAnswers = {};
+    return;
+  }
+  state.currentFormInfo = {name:f.name, questions:f.questions, version:f.version};
+  state.currentAnswers = {};
+  addLine(`form detected: ${f.name}`);
+  f.questions.forEach((q,i)=> addLine(`q${i+1}: ${q}`));
+  addLine("fill: answer <q#> <text>");
+  addLine("then: submit");
+  addLine("other: clearanswers, submissions, view <id>");
+}
+
+function renderTables(text){
+  const lines = (text ?? "").split("\n");
+  let out = [];
+  let inTbl = false;
+  let tbl = [];
+
+  function flushTbl(){
+    if(tbl.length===0) return;
+    const rows = tbl.map(l=>l.split("|").map(c=>c.trim()));
+    const cols = Math.max(...rows.map(r=>r.length), 0);
+    const widths = new Array(cols).fill(0);
+    rows.forEach(r=>{
+      for(let i=0;i<cols;i++){
+        const v = r[i] ?? "";
+        widths[i] = Math.max(widths[i], v.length);
+      }
+    });
+    rows.forEach(r=>{
+      let line = r.map((v,i)=>(v ?? "").padEnd(widths[i], " ")).join(" | ");
+      out.push(line);
+    });
+    tbl = [];
+  }
+
+  for(const l of lines){
+    const s = lc(l).trim();
+    if(s.includes("{writetbl}")){
+      inTbl = true;
+      out.push("");
+      out.push("");
+      continue;
+    }
+    if(s.includes("{endtbl}")){
+      inTbl = false;
+      flushTbl();
+      continue;
+    }
+    if(inTbl){
+      tbl.push(lc(l));
+    } else {
+      out.push(lc(l));
+    }
+  }
+  if(inTbl) flushTbl();
+  return out.join("\n");
+}
+
+async function saveAll(){
+  syncAdminFiles();
+  await kvSet("spirenet_state", {
+    users: state.users,
+    currentUser: state.currentUser,
+    rootId: state.rootId,
+    cwdId: state.cwdId,
+    activeFileId: state.activeFileId,
+    activeFileName: state.activeFileName,
+    nodes: state.nodes,
+    forms: state.forms,
+    submissions: state.submissions
+  });
+}
+
+async function loadAll(){
+  const saved = await kvGet("spirenet_state");
+  if(saved && saved.nodes){
+    state.users = saved.users || [];
+    state.currentUser = saved.currentUser || null;
+    state.rootId = saved.rootId;
+    state.cwdId = saved.cwdId;
+    state.activeFileId = saved.activeFileId ?? null;
+    state.activeFileName = saved.activeFileName ?? null;
+    state.nodes = saved.nodes || [];
+    state.forms = saved.forms || [];
+    state.submissions = saved.submissions || [];
+    state.cwdPath = pathOf(state.cwdId || state.rootId) || "/spirenet";
+    syncAdminFiles();
+    return;
+  }
+
+  // seed filesystem
+  const root = {id:crypto.randomUUID(), parentId:null, name:"spirenet", type:"dir", content:null, createdAt:nowIso()};
+  const admin = {id:crypto.randomUUID(), parentId:root.id, name:"admin", type:"dir", content:null, createdAt:nowIso()};
+  const net = {id:crypto.randomUUID(), parentId:root.id, name:"net", type:"dir", content:null, createdAt:nowIso()};
+  const job = {id:crypto.randomUUID(), parentId:root.id, name:"job", type:"dir", content:null, createdAt:nowIso()};
+  const adminUsers = {id:crypto.randomUUID(), parentId:admin.id, name:"admin_users", type:"file", content:"", createdAt:nowIso()};
+  const adminLogin = {id:crypto.randomUUID(), parentId:admin.id, name:"admin_login", type:"file", content:ADMIN_PASSWORD, createdAt:nowIso()};
+
+  state.nodes = [root, admin, net, job, adminUsers, adminLogin];
+  state.rootId = root.id;
+  state.cwdId = root.id;
+  state.cwdPath = "/spirenet";
+  state.users = [];
+  syncAdminFiles();
+  await saveAll();
+}
+
+function syncAdminFiles(){
+  const adminDir = state.nodes.find(n=>n.parentId===state.rootId && n.name==="admin" && n.type==="dir");
+  if(!adminDir) return;
+  let usersFile = state.nodes.find(n=>n.parentId===adminDir.id && n.name==="admin_users" && n.type==="file");
+  let loginFile = state.nodes.find(n=>n.parentId===adminDir.id && n.name==="admin_login" && n.type==="file");
+
+  if(!usersFile){
+    usersFile = {id:crypto.randomUUID(), parentId:adminDir.id, name:"admin_users", type:"file", content:"", createdAt:nowIso()};
+    state.nodes.push(usersFile);
+  }
+  if(!loginFile){
+    loginFile = {id:crypto.randomUUID(), parentId:adminDir.id, name:"admin_login", type:"file", content:ADMIN_PASSWORD, createdAt:nowIso()};
+    state.nodes.push(loginFile);
+  }
+
+  usersFile.content = state.users.map(u=>`${u.username} | ${u.password} | ${u.createdAt}`).join("\n");
+  loginFile.content = ADMIN_PASSWORD;
+}
+
+function userExists(username){
+  return state.users.some(u=>u.username===username);
+}
+function userRecord(username){
+  return state.users.find(u=>u.username===username) || null;
+}
+
+const COMMANDS = [
+  ["commandls","list all commands"],
+  ["cmmdhelp","describe commands + usage"],
+  ["pwd","show current directory"],
+  ["whoami","show current user"],
+  ["ls","list directories/files in cwd"],
+  ["cd <path>","change directory (/, .., relative, absolute)"],
+  ["mkdir <name>","create directory in cwd"],
+  ["touch <filename>","create empty file in cwd"],
+  ["rm <name>","delete file or empty dir"],
+  ["mv <source> <dest>","move/rename file or dir"],
+  ["cat <filename>","show file contents"],
+  ["write <filename> <text...>","overwrite file with text"],
+  ["append <filename> <text...>","append newline + text"],
+  ["open <filename>","set active file for printpg"],
+  ["edit <filename>","enter edit mode"],
+  ["done","exit edit mode + save"],
+  ["cancel","exit edit mode without saving"],
+  ["preview <filename>","show rendered table view"],
+  ["print","reprint full session transcript"],
+  ["printpg","print user/cwd/file/file view"],
+  ["entry directory","start form wizard for current directory"],
+  ["complete form","complete form draft"],
+  ["cancelform","discard draft form"],
+  ["answer <q#> <text...>","answer form question"],
+  ["clearanswers","clear form answers"],
+  ["submit","save completed form submission"],
+  ["submissions","list saved submissions"],
+  ["view <id>","view saved submission"],
+  ["adminauth","unlock admin folder barrier"],
+  ["logout","return to login gate"],
+  ["clear","clear terminal display"]
+];
+
+function handleGateLine(line){
+  const t = lc(line).trim();
+
+  if(state.gateMode === "choose"){
+    if(t === "login"){
+      state.gateMode = "login_user";
+      addLine("username?");
+      return;
+    }
+    if(t === "create login"){
+      state.gateMode = "create_admin";
+      addLine("admin password?");
+      return;
+    }
+    addLine('type "login" or "create login"');
+    return;
+  }
+
+  if(state.gateMode === "login_user"){
+    if(!userExists(t)){
+      addLine("username not found");
+      addLine("username?");
+      return;
+    }
+    state.pendingUsername = t;
+    state.gateMode = "login_pass";
+    addLine("password?");
+    return;
+  }
+
+  if(state.gateMode === "login_pass"){
+    const u = userRecord(state.pendingUsername);
+    if(!u || u.password !== t){
+      addLine("invalid password");
+      state.pendingUsername = "";
+      state.gateMode = "choose";
+      addLine('type "login" or "create login"');
+      return;
+    }
+    state.currentUser = u.username;
+    state.phase = "cli";
+    state.gateMode = null;
+    state.pendingUsername = "";
+    saveAll();
+    enterCli();
+    return;
+  }
+
+  if(state.gateMode === "create_admin"){
+    if(t !== ADMIN_PASSWORD){
+      addLine("admin password invalid");
+      state.gateMode = "choose";
+      addLine('type "login" or "create login"');
+      return;
+    }
+    state.gateMode = "create_user";
+    addLine("new username?");
+    return;
+  }
+
+  if(state.gateMode === "create_user"){
+    if(!safeName(t)){
+      addLine("invalid username (use letters, numbers, dash, underscore)");
+      addLine("new username?");
+      return;
+    }
+    if(userExists(t)){
+      addLine("username already exists");
+      addLine("new username?");
+      return;
+    }
+    state.pendingUsername = t;
+    state.gateMode = "create_pass";
+    addLine("new password?");
+    return;
+  }
+
+  if(state.gateMode === "create_pass"){
+    if(!t){
+      addLine("new password?");
+      return;
+    }
+    state.users.push({
+      username: state.pendingUsername,
+      password: t,
+      createdAt: nowIso()
+    });
+    saveAll();
+    addLine("login created");
+    state.pendingUsername = "";
+    state.gateMode = "choose";
+    addLine('type "login" or "create login"');
+    return;
+  }
+}
+
+function enterCli(){
+  state.cwdId = state.rootId;
+  state.cwdPath = "/spirenet";
+  state.adminUnlocked = false;
+  addLine(`${APP_NAME} ready`);
+  addLine(`user: ${state.currentUser}`);
+  addLine("directories visible:");
+  addLine("dir net");
+  addLine("dir job");
+}
+
+function handleEditLine(line){
+  const t = lc(line).trim();
+
+  if(t === "done"){
+    const file = nodeById(state.edit.fileId);
+    if(file && file.type==="file"){
+      file.content = state.edit.bufferLines.join("\n");
+      saveAll();
+      addLine("saved");
+    } else {
+      addLine("error: file missing");
+    }
+    state.edit = null;
+    return;
+  }
+
+  if(t === "cancel"){
+    state.edit = null;
+    addLine("canceled");
+    return;
+  }
+
+  if(t.includes("{writetbl}")){
+    state.edit.bufferLines.push("{writetbl}");
+    state.edit.inTable = true;
+    addLine("(table mode: type rows like: name | age | id. then {endtbl})");
+    return;
+  }
+
+  if(t.includes("{endtbl}")){
+    state.edit.bufferLines.push("{endtbl}");
+    state.edit.inTable = false;
+    addLine("(table ended)");
+    return;
+  }
+
+  state.edit.bufferLines.push(line);
+}
+
+function handleWizardLine(line){
+  const t = lc(line).trim();
+
+  if(state.wizard.mode === "formname"){
+    if(!t){ addLine("form name?"); return; }
+    state.wizard.name = t;
+    state.wizard.mode = "questions";
+    addLine("add question (or type done)?");
+    return;
+  }
+
+  if(state.wizard.mode === "questions"){
+    if(t === "done"){
+      if(state.wizard.questions.length === 0){
+        addLine("error: add at least one question");
+        addLine("add question (or type done)?");
+        return;
+      }
+      state.forms.push({
+        dirId: state.wizard.dirId,
+        status: "draft",
+        name: state.wizard.name,
+        questions: state.wizard.questions.slice(),
+        version: "",
+        createdAt: nowIso()
+      });
+      state.wizard = null;
+      saveAll();
+      addLine("draft saved. run: complete form");
+      return;
+    }
+    if(!t){
+      addLine("add question (or type done)?");
+      return;
+    }
+    state.wizard.questions.push(t);
+    addLine("add question (or type done)?");
+  }
+}
+
+function handleCliLine(line){
+  if(state.edit){
+    handleEditLine(line);
+    return;
+  }
+
+  if(state.wizard){
+    handleWizardLine(line);
+    return;
+  }
+
+  const {cmd,args} = splitCmd(line);
+
+  if(cmd === "commandls"){
+    addLine("commands:");
+    COMMANDS.forEach(c=> addLine(c[0]));
+    return;
+  }
+
+  if(cmd === "cmmdhelp"){
+    addLine("command descriptions:");
+    COMMANDS.forEach(([k,d])=> addLine(`${k} : ${d}`));
+    return;
+  }
+
+  if(cmd === "clear"){
+    state.transcript = [];
+    addLine("cleared");
+    return;
+  }
+
+  if(cmd === "logout"){
+    state.phase = "gate";
+    state.gateMode = "choose";
+    state.currentUser = null;
+    state.adminUnlocked = false;
+    state.edit = null;
+    state.wizard = null;
+    saveAll();
+    addLine("logged out");
+    addLine('type "login" or "create login"');
+    return;
+  }
+
+  if(cmd === "adminauth"){
+    addLine("enter admin password with: adminauth <password>");
+    return;
+  }
+
+  if(cmd === "adminauth" && args.length){
+    // unreachable because cmd handled above first
+    return;
+  }
+
+  if(line.startsWith("adminauth ")){
+    const pw = line.slice("adminauth ".length).trim();
+    if(pw === ADMIN_PASSWORD){
+      state.adminUnlocked = true;
+      addLine("admin barrier unlocked");
+    } else {
+      addLine("invalid admin password");
+    }
+    return;
+  }
+
+  if(cmd === "whoami"){
+    addLine(state.currentUser || "");
+    return;
+  }
+
+  if(cmd === "pwd"){
+    addLine(state.cwdPath);
+    return;
+  }
+
+  if(cmd === "ls"){
+    const kids = visibleChildrenOf(state.cwdId);
+    const dirs = kids.filter(n=>n.type==="dir");
+    const files = kids.filter(n=>n.type==="file");
+    if(dirs.length===0 && files.length===0){
+      addLine("(empty)");
+      return;
+    }
+    dirs.forEach(d=> addLine("dir " + d.name));
+    files.forEach(f=> addLine("file " + f.name));
+    return;
+  }
+
+  if(cmd === "cd"){
+    if(args.length < 1){ addLine("error: missing path"); return; }
+    const target = resolvePath(state.cwdId, args[0]);
+    if(!target.ok){ addLine("error: " + target.err); return; }
+    const n = nodeById(target.id);
+    if(!n || n.type!=="dir"){ addLine("error: not a directory"); return; }
+    if(pathOf(n.id) === "/spirenet/admin" && !state.adminUnlocked){
+      addLine("error: admin barrier locked");
+      return;
+    }
+    state.cwdId = n.id;
+    state.cwdPath = pathOf(n.id);
+    saveAll();
+    addLine(state.cwdPath);
+    emitFormInfoIfAny(state.cwdId);
+    return;
+  }
+
+  if(cmd === "mkdir"){
+    if(args.length < 1){ addLine("error: missing name"); return; }
+    const name = args[0];
+    if(!safeName(name)){ addLine("error: invalid name (use letters, numbers, dash, underscore)"); return; }
+    if(childByName(state.cwdId, name)){ addLine("error: already exists"); return; }
+    state.nodes.push({id:crypto.randomUUID(), parentId:state.cwdId, name, type:"dir", content:null, createdAt:nowIso()});
+    saveAll();
+    addLine("ok");
+    return;
+  }
+
+  if(cmd === "touch"){
+    if(args.length < 1){ addLine("error: missing filename"); return; }
+    const name = args[0];
+    if(!safeName(name)){ addLine("error: invalid filename (use letters, numbers, dash, underscore)"); return; }
+    if(childByName(state.cwdId, name)){ addLine("error: already exists"); return; }
+    state.nodes.push({id:crypto.randomUUID(), parentId:state.cwdId, name, type:"file", content:"", createdAt:nowIso()});
+    saveAll();
+    addLine("ok");
+    return;
+  }
+
+  if(cmd === "rm"){
+    if(args.length < 1){ addLine("error: missing name"); return; }
+    const n = childByName(state.cwdId, args[0]);
+    if(!n){ addLine("not found"); return; }
+    if(n.type==="dir"){
+      const kids = childrenOf(n.id);
+      if(kids.length>0){ addLine("error: directory not empty"); return; }
+    }
+    if(state.activeFileId === n.id){
+      state.activeFileId = null;
+      state.activeFileName = null;
+    }
+    state.nodes = state.nodes.filter(x=>x.id!==n.id);
+    if(n.type==="dir"){
+      state.forms = state.forms.filter(f=>f.dirId!==n.id);
+      state.submissions = state.submissions.filter(s=>s.dirId!==n.id);
+    }
+    saveAll();
+    addLine("ok");
+    return;
+  }
+
+  if(cmd === "mv"){
+    if(args.length < 2){ addLine("error: mv <source> <dest>"); return; }
+    const srcRes = resolvePath(state.cwdId, args[0]);
+    if(!srcRes.ok){ addLine("error: " + srcRes.err); return; }
+    const srcNode = nodeById(srcRes.id);
+    if(!srcNode || srcNode.id===state.rootId){ addLine("error: invalid source"); return; }
+
+    const dstRes = resolvePath(state.cwdId, args[1]);
+    if(dstRes.ok){
+      const dstNode = nodeById(dstRes.id);
+      if(dstNode && dstNode.type==="dir"){
+        if(pathOf(dstNode.id) === "/spirenet/admin" && !state.adminUnlocked){
+          addLine("error: admin barrier locked");
+          return;
+        }
+        if(childByName(dstNode.id, srcNode.name)){ addLine("error: name conflict"); return; }
+        srcNode.parentId = dstNode.id;
+        saveAll();
+        addLine("ok");
+        return;
+      }
+    }
+
+    const dp = normalizePath(args[1]);
+    const parts = dp.replace(/^\/spirenet/,"").replace(/^\//,"").split("/").filter(Boolean);
+    if(parts.length===0){ addLine("error: invalid dest"); return; }
+    const newName = parts[parts.length-1];
+    if(!safeName(newName)){ addLine("error: invalid name"); return; }
+    const parentPathRaw = parts.slice(0,-1).join("/");
+    const parentRes = parentPathRaw ? resolvePath(state.cwdId, parentPathRaw) : {ok:true,id:state.cwdId};
+    if(!parentRes.ok){ addLine("error: invalid dest path"); return; }
+    const parentNode = nodeById(parentRes.id);
+    if(!parentNode || parentNode.type!=="dir"){ addLine("error: invalid dest directory"); return; }
+    if(pathOf(parentNode.id) === "/spirenet/admin" && !state.adminUnlocked){
+      addLine("error: admin barrier locked");
+      return;
+    }
+    if(childByName(parentNode.id,newName)){ addLine("error: name conflict"); return; }
+    srcNode.parentId = parentNode.id;
+    srcNode.name = newName;
+    saveAll();
+    addLine("ok");
+    return;
+  }
+
+  if(cmd === "cat"){
+    if(args.length < 1){ addLine("error: missing filename"); return; }
+    const n = childByName(state.cwdId,args[0]);
+    if(!n || n.type!=="file"){ addLine("not found"); return; }
+    addLine(n.content || "");
+    return;
+  }
+
+  if(cmd === "write"){
+    if(args.length < 2){ addLine("error: write <filename> <text...>"); return; }
+    const n = childByName(state.cwdId,args[0]);
+    if(!n || n.type!=="file"){ addLine("not found"); return; }
+    n.content = joinRest(args.slice(1));
+    saveAll();
+    addLine("ok");
+    return;
+  }
+
+  if(cmd === "append"){
+    if(args.length < 2){ addLine("error: append <filename> <text...>"); return; }
+    const n = childByName(state.cwdId,args[0]);
+    if(!n || n.type!=="file"){ addLine("not found"); return; }
+    const t = joinRest(args.slice(1));
+    n.content = (n.content || "") ? (n.content + "\n" + t) : t;
+    saveAll();
+    addLine("ok");
+    return;
+  }
+
+  if(cmd === "open"){
+    if(args.length < 1){ addLine("error: open <filename>"); return; }
+    const n = childByName(state.cwdId,args[0]);
+    if(!n || n.type!=="file"){ addLine("not found"); return; }
+    state.activeFileId = n.id;
+    state.activeFileName = n.name;
+    saveAll();
+    addLine("active file set");
+    return;
+  }
+
+  if(cmd === "edit"){
+    if(args.length < 1){ addLine("error: edit <filename>"); return; }
+    const name = args[0];
+    let n = childByName(state.cwdId,name);
+    if(!n){
+      if(!safeName(name)){ addLine("error: invalid filename"); return; }
+      n = {id:crypto.randomUUID(), parentId:state.cwdId, name, type:"file", content:"", createdAt:nowIso()};
+      state.nodes.push(n);
+      saveAll();
+      addLine("created file");
+    }
+    if(n.type!=="file"){ addLine("error: not a file"); return; }
+
+    state.edit = {
+      fileId: n.id,
+      bufferLines: (n.content || "").split("\n"),
+      inTable:false,
+      tableLines:[]
+    };
+    state.activeFileId = n.id;
+    state.activeFileName = n.name;
+    saveAll();
+    addLine(`editing ${n.name}`);
+    addLine("type lines. use {writetbl} ... {endtbl} to insert a table.");
+    addLine("type done to save, cancel to discard.");
+    return;
+  }
+
+  if(cmd === "done" || cmd === "cancel"){
+    addLine("error: not in edit mode");
+    return;
+  }
+
+  if(cmd === "preview"){
+    if(args.length < 1){ addLine("error: preview <filename>"); return; }
+    const n = childByName(state.cwdId,args[0]);
+    if(!n || n.type!=="file"){ addLine("not found"); return; }
+    addLine("preview:");
+    addLine(renderTables(n.content || ""));
+    return;
+  }
+
+  if(cmd === "print"){
+    const slice = state.transcript.slice(state.sessionStartIndex);
+    slice.forEach(l=> state.transcript.push(l));
+    addLine("(printed transcript)");
+    return;
+  }
+
+  if(cmd === "printpg"){
+    const cwd = state.cwdPath;
+    const fileName = state.activeFileName || "(none)";
+    let fileView = "";
+    if(state.activeFileId){
+      const n = nodeById(state.activeFileId);
+      if(n && n.type==="file") fileView = renderTables(n.content || "");
+    }
+    const printText =
+`print page
+
+user: ${state.currentUser || ""}
+cwd: ${cwd}
+file: ${fileName}
+
+file view:
+${fileView}
+`;
+    const safe = escapeHtml(printText);
+    const html = `<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>print</title>
+<style>
+body{font-family:menlo,monospace;font-size:12px;margin:40px;color:#000;background:#fff;}
+pre{white-space:pre-wrap;word-wrap:break-word;overflow-wrap:anywhere;font-family:menlo,monospace;font-size:12px;}
+</style>
+</head><body>
+<pre>${safe}</pre>
+<script>setTimeout(()=>{window.print()},400)<\/script>
+</body></html>`;
+    const blob = new Blob([html], {type:"text/html"});
+    const url = URL.createObjectURL(blob);
+    window.open(url, "_blank");
+    addLine("print ready");
+    return;
+  }
+
+  if(cmd === "entry" && args[0]==="directory"){
+    if(formForDirCompleted(state.cwdId)){
+      addLine("error: form already completed in this directory");
+      return;
+    }
+    if(formForDirDraft(state.cwdId)){
+      addLine("error: draft already exists. use complete form or cancelform");
+      return;
+    }
+    state.wizard = {mode:"formname", dirId: state.cwdId, name:"", questions:[]};
+    addLine("form name?");
+    return;
+  }
+
+  if(cmd === "complete" && args[0]==="form"){
+    const d = formForDirDraft(state.cwdId);
+    if(!d){ addLine("error: no draft form in this directory"); return; }
+    if(!d.name || d.questions.length===0){
+      addLine("error: draft incomplete");
+      return;
+    }
+    d.status = "completed";
+    d.version = versionForForm(d.name, d.questions);
+    saveAll();
+    addLine("form completed");
+    emitFormInfoIfAny(state.cwdId);
+    return;
+  }
+
+  if(cmd === "cancelform"){
+    const d = formForDirDraft(state.cwdId);
+    if(!d){ addLine("error: no draft form"); return; }
+    state.forms = state.forms.filter(f=>!(f.dirId===state.cwdId && f.status==="draft"));
+    state.wizard = null;
+    saveAll();
+    addLine("draft discarded");
+    return;
+  }
+
+  if(cmd === "answer"){
+    if(args.length < 2){ addLine("error: answer <q#> <text...>"); return; }
+    const f = formForDirCompleted(state.cwdId);
+    if(!f){ addLine("error: no completed form in this directory"); return; }
+    const qn = parseInt(args[0].replace("q",""),10);
+    if(!Number.isFinite(qn) || qn<1 || qn>f.questions.length){
+      addLine("error: invalid question number");
+      return;
+    }
+    state.currentAnswers[qn] = joinRest(args.slice(1));
+    addLine(`ok (q${qn})`);
+    return;
+  }
+
+  if(cmd === "clearanswers"){
+    state.currentAnswers = {};
+    addLine("ok");
+    return;
+  }
+
+  if(cmd === "submit"){
+    const f = formForDirCompleted(state.cwdId);
+    if(!f){ addLine("error: no completed form in this directory"); return; }
+    for(let i=1;i<=f.questions.length;i++){
+      if(!state.currentAnswers[i] || state.currentAnswers[i].trim()===""){
+        addLine(`error: missing answer q${i}`);
+        return;
+      }
+    }
+    const id = crypto.randomUUID().slice(0,8);
+    const answers = {};
+    for(let i=1;i<=f.questions.length;i++) answers["q"+i] = state.currentAnswers[i];
+    state.submissions.push({
+      id,
+      dirId: state.cwdId,
+      formVersion: f.version,
+      answers,
+      createdAt: nowIso()
+    });
+    state.currentAnswers = {};
+    saveAll();
+    addLine(`saved submission ${id}`);
+    return;
+  }
+
+  if(cmd === "submissions"){
+    const items = state.submissions.filter(s=>s.dirId===state.cwdId).slice(-20).reverse();
+    if(items.length===0){ addLine("(none)"); return; }
+    items.forEach(s=> addLine(`${s.id} ${s.createdAt}`));
+    return;
+  }
+
+  if(cmd === "view"){
+    if(args.length < 1){ addLine("error: view <id>"); return; }
+    const s = state.submissions.find(x=>x.id===args[0] && x.dirId===state.cwdId);
+    if(!s){ addLine("not found"); return; }
+    const f = formForDirCompleted(state.cwdId);
+    const questions = f ? f.questions : [];
+    addLine(`submission ${s.id}`);
+    questions.forEach((q,i)=>{
+      addLine(`q${i+1}: ${q}`);
+      addLine(`${s.answers["q"+(i+1)] ?? ""}`);
+    });
+    return;
+  }
+
+  addLine("unknown command");
+}
+
+function handleLine(line){
+  if(state.phase === "gate"){
+    handleGateLine(line);
+    saveAll();
+    return;
+  }
+  handleCliLine(line);
+  saveAll();
+}
+
+(async function boot(){
+  await loadAll();
+
+  state.phase = "gate";
+  state.gateMode = "choose";
+  state.sessionStartIndex = state.transcript.length;
+
+  addLine("spirenet");
+  addLine('type "login" or "create login"');
+
+  render();
+  setTimeout(()=>{ try{ input.focus(); }catch(e){} }, 700);
+})();
+</script>
+</body>
+</html><!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>data cli</title>
+
+<style>
+:root{ --bg:#000; --text:#fff; --dim:rgba(255,255,255,0.65); }
+@media (prefers-color-scheme: light){
+  :root{ --bg:#e6e6e6; --text:#000; --dim:rgba(0,0,0,0.65); }
+}
+
+html,body{
+  height:100%;
+  margin:0;
+  background:var(--bg);
+  color:var(--text);
+  font-family:menlo,monospace;
+  font-size:12px;
+  overflow:hidden;
+}
+
+#terminal{
+  position:fixed;
+  inset:0;
+  padding:12px;
+  overflow-y:auto;
+  white-space:pre-wrap;
+  -webkit-overflow-scrolling:touch;
+}
+
+#tapCatcher{
+  position:fixed;
+  inset:0;
+  background:transparent;
+}
+
+#hint{
+  position:fixed;
+  left:12px;
+  bottom:12px;
+  opacity:0.65;
+  pointer-events:none;
+  user-select:none;
+  color:var(--dim);
+}
+
+/* keep input inside viewport so ios will focus reliably */
+#hiddenInput{
+  position:fixed;
+  left:8px;
+  bottom:8px;
+  width:10px;
+  height:10px;
+  opacity:0;
+  background:transparent;
+  color:transparent;
+  border:0;
+  outline:0;
+  caret-color:transparent;
+  -webkit-text-fill-color:transparent;
+}
+</style>
+</head>
+
+<body>
+<div id="terminal"></div>
+<div id="tapCatcher" aria-hidden="true"></div>
+<div id="hint">tap to type</div>
+<input id="hiddenInput" type="text" autocapitalize="none" autocomplete="off" autocorrect="off" spellcheck="false" inputmode="text">
+
+<script>
+/* =========================
+   utilities
+========================= */
+const terminal = document.getElementById("terminal");
+const input = document.getElementById("hiddenInput");
+const tap = document.getElementById("tapCatcher");
+const hint = document.getElementById("hint");
+
+function lc(s){ return (s ?? "").toString().toLowerCase(); }
+function nowIso(){ return new Date().toISOString(); }
+function safeName(s){ return /^[a-z0-9_-]+$/.test(s); }
+function splitCmd(line){
+  // command + args; for text commands, keep rest of line
+  const t = line.trim();
+  if(!t) return {cmd:"", args:[]};
+  const parts = t.split(" ");
+  return {cmd: parts[0], args: parts.slice(1)};
+}
+function joinRest(args){ return args.join(" ").trim(); }
+function normalizePath(p){
+  p = lc(p);
+  if(!p) return "";
+  p = p.replaceAll("\\","/");
+  while(p.includes("//")) p = p.replaceAll("//","/");
+  if(p.length>1 && p.endsWith("/")) p = p.slice(0,-1);
+  return p;
+}
+function escapeHtml(s){
+  return (s??"").toString()
+    .replaceAll("&","&amp;")
+    .replaceAll("<","&lt;")
+    .replaceAll(">","&gt;");
+}
+
+/* =========================
+   persistence (indexeddb)
+   stores everything locally on device
+========================= */
+const DB_NAME = "data_cli_db";
+const DB_VER = 1;
+
+function openDB(){
+  return new Promise((resolve,reject)=>{
+    const req = indexedDB.open(DB_NAME, DB_VER);
+    req.onupgradeneeded = (e)=>{
+      const db = req.result;
+      if(!db.objectStoreNames.contains("kv")){
+        db.createObjectStore("kv");
+      }
+    };
+    req.onsuccess = ()=> resolve(req.result);
+    req.onerror = ()=> reject(req.error);
+  });
+}
+
+async function kvGet(key){
+  const db = await openDB();
+  return new Promise((resolve,reject)=>{
+    const tx = db.transaction("kv","readonly");
+    const st = tx.objectStore("kv");
+    const r = st.get(key);
+    r.onsuccess = ()=> resolve(r.result);
+    r.onerror = ()=> reject(r.error);
+  });
+}
+
+async function kvSet(key, val){
+  const db = await openDB();
+  return new Promise((resolve,reject)=>{
+    const tx = db.transaction("kv","readwrite");
+    const st = tx.objectStore("kv");
+    const r = st.put(val, key);
+    r.onsuccess = ()=> resolve(true);
+    r.onerror = ()=> reject(r.error);
+  });
+}
+
+/* =========================
+   state
+========================= */
+let transcript = [];
+let current = "";
+let sessionStartIndex = 0;
+
+const state = {
+  user: "operator",
+  rootId: null,
+  cwdId: null,
+  cwdPath: "/",
+  activeFileId: null,
+  activeFileName: null,
+
+  nodes: [], // {id,parentId,name,type,content,createdAt}
+  forms: [], // {dirId,status,name,questions,version,createdAt}
+  submissions: [], // {id,dirId,formVersion,answers,createdAt}
+
+  // form fill (in-progress) per session
+  currentAnswers: {}, // {qIndex: "text"}
+  currentFormInfo: null, // {name, questions, version}
+  
+  // wizard state
+  wizard: null, // {mode:"formname"/"questions", dirId, name, questions:[]}
+
+  // edit mode
+  edit: null, // {fileId, bufferLines:[], inTable:false, tableLines:[]}
+};
+
+function addLine(t){
+  transcript.push(lc(t));
+}
+function addSys(t){
+  addLine(t);
+}
+function addPromptEcho(t){
+  transcript.push("> " + lc(t));
+}
+
+function render(){
+  terminal.textContent = transcript.join("\n") + "\n> " + current + "_"; // non-blinking cursor
+  terminal.scrollTop = terminal.scrollHeight;
+}
+
+function focusInput(){
+  input.focus();
+  setTimeout(()=>input.focus(), 30);
+  setTimeout(()=>input.focus(), 120);
+  setTimeout(()=>{
+    if(document.activeElement === input) hint.style.display = "none";
+  }, 80);
+}
+
+tap.addEventListener("touchstart", focusInput, {passive:true});
+tap.addEventListener("pointerdown", focusInput, {passive:true});
+terminal.addEventListener("touchstart", focusInput, {passive:true});
+terminal.addEventListener("pointerdown", focusInput, {passive:true});
+document.addEventListener("visibilitychange", ()=>{
+  if(!document.hidden) setTimeout(focusInput, 150);
+});
+
+input.addEventListener("input", ()=>{
+  current = lc(input.value);
+  if(input.value !== current) input.value = current;
+  render();
+});
+
+input.addEventListener("keydown", (e)=>{
+  if(e.key === "Enter"){
+    e.preventDefault();
+    const line = lc(current);
+    current = "";
+    input.value = "";
+    // process
+    if(line.trim().length){
+      addPromptEcho(line);
+      handleLine(line);
+    }
+    render();
+  }
+});
+
+/* =========================
+   load/save
+========================= */
+async function saveAll(){
+  await kvSet("data", {
+    user: state.user,
+    rootId: state.rootId,
+    cwdId: state.cwdId,
+    activeFileId: state.activeFileId,
+    activeFileName: state.activeFileName,
+    nodes: state.nodes,
+    forms: state.forms,
+    submissions: state.submissions
+  });
+}
+
+async function loadAll(){
+  const data = await kvGet("data");
+  if(data && data.nodes){
+    state.user = data.user || "operator";
+    state.rootId = data.rootId;
+    state.cwdId = data.cwdId;
+    state.activeFileId = data.activeFileId ?? null;
+    state.activeFileName = data.activeFileName ?? null;
+    state.nodes = data.nodes || [];
+    state.forms = data.forms || [];
+    state.submissions = data.submissions || [];
+    // recompute cwdPath
+    state.cwdPath = pathOf(state.cwdId || state.rootId) || "/";
+  } else {
+    // seed
+    const root = {id: crypto.randomUUID(), parentId: null, name: "/", type:"dir", content:null, createdAt: nowIso()};
+    state.nodes = [root];
+    state.rootId = root.id;
+    state.cwdId = root.id;
+    state.cwdPath = "/";
+    state.activeFileId = null;
+    state.activeFileName = null;
+    state.forms = [];
+    state.submissions = [];
+    await saveAll();
+  }
+}
+
+/* =========================
+   node helpers
+========================= */
+function nodeById(id){ return state.nodes.find(n=>n.id===id) || null; }
+
+function childrenOf(dirId){
+  return state.nodes.filter(n=>n.parentId===dirId).sort((a,b)=>a.name.localeCompare(b.name));
+}
+
+function childByName(dirId, name){
+  return state.nodes.find(n=>n.parentId===dirId && n.name===name) || null;
+}
+
+function pathOf(id){
+  const n = nodeById(id);
+  if(!n) return "/";
+  if(n.id === state.rootId) return "/";
+  let parts = [];
+  let cur = n;
+  while(cur && cur.parentId){
+    parts.push(cur.name);
+    cur = nodeById(cur.parentId);
+    if(cur && cur.id === state.rootId) break;
+  }
+  return "/" + parts.reverse().join("/");
+}
+
+function resolvePath(fromDirId, raw){
+  raw = normalizePath(raw);
+  if(raw === "" || raw === ".") return {ok:true, id: fromDirId};
+  if(raw === "/") return {ok:true, id: state.rootId};
+
+  let startId = fromDirId;
+  if(raw.startsWith("/")) startId = state.rootId;
+
+  const parts = raw.split("/").filter(p=>p.length>0);
+  let curId = startId;
+
+  for(const part of parts){
+    if(part === ".") continue;
+    if(part === ".."){
+      const cur = nodeById(curId);
+      if(cur && cur.parentId) curId = cur.parentId;
+      continue;
+    }
+    const child = childByName(curId, part);
+    if(!child) return {ok:false, err:`not found: ${raw}`};
+    curId = child.id;
+  }
+  return {ok:true, id: curId};
+}
+
+/* =========================
+   forms helpers
+========================= */
+function formForDirCompleted(dirId){
+  return state.forms.find(f=>f.dirId===dirId && f.status==="completed") || null;
+}
+function formForDirDraft(dirId){
+  return state.forms.find(f=>f.dirId===dirId && f.status==="draft") || null;
+}
+function versionForForm(name, questions){
+  // lightweight stable version hash
+  const s = name + "::" + questions.join("||");
+  let h = 0;
+  for(let i=0;i<s.length;i++){
+    h = (h*31 + s.charCodeAt(i)) >>> 0;
+  }
+  return "v" + h.toString(16);
+}
+
+function emitFormInfoIfAny(dirId){
+  const f = formForDirCompleted(dirId);
+  if(!f){
+    state.currentFormInfo = null;
+    state.currentAnswers = {};
+    return;
+  }
+  state.currentFormInfo = {name:f.name, questions:f.questions, version:f.version};
+  state.currentAnswers = {};
+  addSys(`form detected: ${f.name}`);
+  f.questions.forEach((q,i)=> addSys(`q${i+1}: ${q}`));
+  addSys(`fill: answer <q#> <text>`);
+  addSys(`then: submit`);
+  addSys(`other: clearanswers, submissions, view <id>`);
+}
+
+/* =========================
+   table rendering for preview/print
+========================= */
+function renderTables(text){
+  // within edit, we store {writetbl} ... {endtbl} blocks as literal markers.
+  // preview renders them aligned.
+  const lines = (text ?? "").split("\n");
+  let out = [];
+  let inTbl = false;
+  let tbl = [];
+
+  function flushTbl(){
+    if(tbl.length===0) return;
+    // parse rows by "|" with trimming
+    const rows = tbl.map(l=>l.split("|").map(c=>c.trim()));
+    const cols = Math.max(...rows.map(r=>r.length), 0);
+    const widths = new Array(cols).fill(0);
+    rows.forEach(r=>{
+      for(let i=0;i<cols;i++){
+        const v = r[i] ?? "";
+        widths[i] = Math.max(widths[i], v.length);
+      }
+    });
+    rows.forEach(r=>{
+      let line = r.map((v,i)=>{
+        v = v ?? "";
+        return v.padEnd(widths[i], " ");
+      }).join(" | ");
+      out.push(line);
+    });
+    tbl = [];
+  }
+
+  for(const l of lines){
+    const s = lc(l).trim();
+    if(s.includes("{writetbl}")){
+      inTbl = true;
+      out.push(""); // shift down (as you wanted)
+      out.push("");
+      continue;
+    }
+    if(s.includes("{endtbl}")){
+      inTbl = false;
+      flushTbl();
+      continue;
+    }
+    if(inTbl){
+      tbl.push(lc(l));
+    } else {
+      out.push(lc(l));
+    }
+  }
+  if(inTbl) flushTbl();
+  return out.join("\n");
+}
+
+/* =========================
+   command help text
+========================= */
+const COMMANDS = [
+  ["commandls","list all commands"],
+  ["cmmdhelp","describe commands + usage"],
+  ["pwd","show current directory"],
+  ["whoami","show current user"],
+  ["ls","list directories/files in cwd"],
+  ["cd <path>","change directory (/, .., relative, absolute)"],
+  ["mkdir <name>","create directory in cwd"],
+  ["touch <filename>","create empty file in cwd"],
+  ["rm <name>","delete file or empty dir"],
+  ["mv <source> <dest>","move/rename file or dir"],
+  ["cat <filename>","show file contents"],
+  ["write <filename> <text...>","overwrite file with text"],
+  ["append <filename> <text...>","append newline + text"],
+  ["open <filename>","set active file for printpg"],
+  ["edit <filename>","enter edit mode (multi-line)"],
+  ["done","exit edit mode + save"],
+  ["cancel","exit edit mode without saving"],
+  ["preview <filename>","show rendered view (tables aligned)"],
+  ["print","reprint full session transcript since load/login"],
+  ["printpg","open print view (menlo) with user/cwd/file + file view"],
+  ["entry directory","start form builder wizard for this directory"],
+  ["complete form","complete draft form in this directory"],
+  ["cancelform","discard draft form in this directory"],
+  ["answer <q#> <text...>","answer a form question in current dir"],
+  ["clearanswers","clear in-progress form answers"],
+  ["submit","save completed form submission"],
+  ["submissions","list recent submissions in this dir"],
+  ["view <id>","view a submission by id"],
+  ["clear","clear the terminal display (data stays)"]
+];
+
+/* =========================
+   core handler
+========================= */
+function handleLine(line){
+  line = lc(line);
+
+  // if in edit mode, treat input as text unless it contains tbl markers
+  if(state.edit){
+    handleEditLine(line);
+    return;
+  }
+
+  // wizard intercept (form creation)
+  if(state.wizard){
+    handleWizardLine(line);
+    return;
+  }
+
+  // commands
+  const {cmd, args} = splitCmd(line);
+
+  if(cmd === "commandls"){
+    addSys("commands:");
+    COMMANDS.forEach(c=> addSys(c[0]));
+    return;
+  }
+
+  if(cmd === "cmmdhelp"){
+    addSys("command descriptions:");
+    COMMANDS.forEach(([k,d])=> addSys(`${k} : ${d}`));
+    addSys("notes:");
+    addSys("- names must be letters/numbers/dash/underscore");
+    addSys("- everything is forced lowercase");
+    addSys("- edit mode: type lines, use {writetbl} ... {endtbl}, then done");
+    return;
+  }
+
+  if(cmd === "clear"){
+    transcript = [];
+    // keep prompt context
+    addSys("cleared");
+    return;
+  }
+
+  if(cmd === "whoami"){
+    addSys(state.user);
+    return;
+  }
+
+  if(cmd === "pwd"){
+    addSys(state.cwdPath);
+    return;
+  }
+
+  if(cmd === "ls"){
+    const kids = childrenOf(state.cwdId);
+    const dirs = kids.filter(n=>n.type==="dir");
+    const files = kids.filter(n=>n.type==="file");
+    if(dirs.length===0 && files.length===0){
+      addSys("(empty)");
+      return;
+    }
+    dirs.forEach(d=> addSys("dir " + d.name));
+    files.forEach(f=> addSys("file " + f.name));
+    return;
+  }
+
+  if(cmd === "cd"){
+    if(args.length < 1){ addSys("error: missing path"); return; }
+    const target = resolvePath(state.cwdId, args[0]);
+    if(!target.ok){ addSys("error: " + target.err); return; }
+    const n = nodeById(target.id);
+    if(!n || n.type!=="dir"){ addSys("error: not a directory"); return; }
+    state.cwdId = n.id;
+    state.cwdPath = pathOf(n.id);
+    saveAll();
+    addSys(state.cwdPath);
+    emitFormInfoIfAny(state.cwdId);
+    return;
+  }
+
+  if(cmd === "mkdir"){
+    if(args.length < 1){ addSys("error: missing name"); return; }
+    const name = args[0];
+    if(!safeName(name)){ addSys("error: invalid name (use letters, numbers, dash, underscore)"); return; }
+    if(childByName(state.cwdId, name)){ addSys("error: already exists"); return; }
+    state.nodes.push({id:crypto.randomUUID(), parentId:state.cwdId, name, type:"dir", content:null, createdAt:nowIso()});
+    saveAll();
+    addSys("ok");
+    return;
+  }
+
+  if(cmd === "touch"){
+    if(args.length < 1){ addSys("error: missing filename"); return; }
+    const name = args[0];
+    if(!safeName(name)){ addSys("error: invalid filename (use letters, numbers, dash, underscore)"); return; }
+    if(childByName(state.cwdId, name)){ addSys("error: already exists"); return; }
+    state.nodes.push({id:crypto.randomUUID(), parentId:state.cwdId, name, type:"file", content:"", createdAt:nowIso()});
+    saveAll();
+    addSys("ok");
+    return;
+  }
+
+  if(cmd === "rm"){
+    if(args.length < 1){ addSys("error: missing name"); return; }
+    const name = args[0];
+    const n = childByName(state.cwdId, name);
+    if(!n){ addSys("not found"); return; }
+    if(n.type==="dir"){
+      const kids = childrenOf(n.id);
+      if(kids.length>0){ addSys("error: directory not empty"); return; }
+    }
+    // if deleting active file
+    if(state.activeFileId === n.id){
+      state.activeFileId = null;
+      state.activeFileName = null;
+    }
+    // delete node
+    state.nodes = state.nodes.filter(x=>x.id!==n.id);
+    // delete related forms/submissions if directory removed
+    if(n.type==="dir"){
+      state.forms = state.forms.filter(f=>f.dirId!==n.id);
+      state.submissions = state.submissions.filter(s=>s.dirId!==n.id);
+    }
+    saveAll();
+    addSys("ok");
+    return;
+  }
+
+  if(cmd === "mv"){
+    if(args.length < 2){ addSys("error: mv <source> <dest>"); return; }
+    const srcRaw = args[0];
+    const dstRaw = args[1];
+
+    const srcRes = resolvePath(state.cwdId, srcRaw);
+    if(!srcRes.ok){ addSys("error: " + srcRes.err); return; }
+    const srcNode = nodeById(srcRes.id);
+    if(!srcNode){ addSys("error: not found"); return; }
+    if(srcNode.id === state.rootId){ addSys("error: cannot move root"); return; }
+
+    // dest could be directory path or new name/path
+    const dstRes = resolvePath(state.cwdId, dstRaw);
+    if(dstRes.ok){
+      const dstNode = nodeById(dstRes.id);
+      if(dstNode && dstNode.type==="dir"){
+        // move into directory keeping name
+        if(childByName(dstNode.id, srcNode.name)){ addSys("error: name conflict"); return; }
+        srcNode.parentId = dstNode.id;
+        saveAll();
+        addSys("ok");
+        return;
+      }
+    }
+
+    // treat dest as a path where final segment is new name, parent is directory
+    const dp = normalizePath(dstRaw);
+    const abs = dp.startsWith("/");
+    const parts = dp.split("/").filter(Boolean);
+    if(parts.length===0){ addSys("error: invalid dest"); return; }
+    const newName = parts[parts.length-1];
+    if(!safeName(newName)){ addSys("error: invalid name"); return; }
+    const parentPath = (abs ? "/" : "") + parts.slice(0,-1).join("/");
+    const parentRes = parts.length===1
+      ? {ok:true, id: (abs ? state.rootId : state.cwdId)}
+      : resolvePath(state.cwdId, parentPath);
+
+    if(!parentRes.ok){ addSys("error: invalid dest path"); return; }
+    const parentNode = nodeById(parentRes.id);
+    if(!parentNode || parentNode.type!=="dir"){ addSys("error: invalid dest directory"); return; }
+    if(childByName(parentNode.id, newName)){ addSys("error: name conflict"); return; }
+
+    srcNode.parentId = parentNode.id;
+    srcNode.name = newName;
+    saveAll();
+    addSys("ok");
+    return;
+  }
+
+  if(cmd === "cat"){
+    if(args.length < 1){ addSys("error: missing filename"); return; }
+    const n = childByName(state.cwdId, args[0]);
+    if(!n || n.type!=="file"){ addSys("not found"); return; }
+    addSys(n.content || "");
+    return;
+  }
+
+  if(cmd === "write"){
+    if(args.length < 2){ addSys("error: write <filename> <text...>"); return; }
+    const name = args[0];
+    const n = childByName(state.cwdId, name);
+    if(!n || n.type!=="file"){ addSys("not found"); return; }
+    n.content = joinRest(args.slice(1));
+    saveAll();
+    addSys("ok");
+    return;
+  }
+
+  if(cmd === "append"){
+    if(args.length < 2){ addSys("error: append <filename> <text...>"); return; }
+    const name = args[0];
+    const n = childByName(state.cwdId, name);
+    if(!n || n.type!=="file"){ addSys("not found"); return; }
+    const t = joinRest(args.slice(1));
+    if((n.content||"").length===0) n.content = t;
+    else n.content = (n.content||"") + "\n" + t;
+    saveAll();
+    addSys("ok");
+    return;
+  }
+
+  if(cmd === "open"){
+    if(args.length < 1){ addSys("error: open <filename>"); return; }
+    const n = childByName(state.cwdId, args[0]);
+    if(!n || n.type!=="file"){ addSys("not found"); return; }
+    state.activeFileId = n.id;
+    state.activeFileName = n.name;
+    saveAll();
+    addSys("active file set");
+    return;
+  }
+
+  if(cmd === "edit"){
+    if(args.length < 1){ addSys("error: edit <filename>"); return; }
+    const name = args[0];
+    let n = childByName(state.cwdId, name);
+    if(!n){
+      // sensible default: create file if missing
+      if(!safeName(name)){ addSys("error: invalid filename"); return; }
+      n = {id:crypto.randomUUID(), parentId:state.cwdId, name, type:"file", content:"", createdAt:nowIso()};
+      state.nodes.push(n);
+      saveAll();
+      addSys("created file");
+    }
+    if(n.type!=="file"){ addSys("error: not a file"); return; }
+
+    state.edit = {
+      fileId: n.id,
+      bufferLines: (n.content || "").split("\n"),
+      inTable:false,
+      tableLines:[]
+    };
+    state.activeFileId = n.id;
+    state.activeFileName = n.name;
+    saveAll();
+    addSys(`editing ${n.name}`);
+    addSys(`type lines. use {writetbl} ... {endtbl} to insert a table.`);
+    addSys(`type done to save, cancel to discard.`);
+    return;
+  }
+
+  if(cmd === "done" || cmd === "cancel"){
+    addSys("error: not in edit mode");
+    return;
+  }
+
+  if(cmd === "preview"){
+    if(args.length < 1){ addSys("error: preview <filename>"); return; }
+    const n = childByName(state.cwdId, args[0]);
+    if(!n || n.type!=="file"){ addSys("not found"); return; }
+    addSys("preview:");
+    addSys(renderTables(n.content || ""));
+    return;
+  }
+
+  if(cmd === "print"){
+    // reprint transcript since "session start"
+    const slice = transcript.slice(sessionStartIndex);
+    slice.forEach(l=> transcript.push(l)); // duplicates ok
+    addSys("(printed transcript)");
+    return;
+  }
+
+  if(cmd === "printpg"){
+    // open print view in new tab/window and call print
+    const cwd = state.cwdPath;
+    const fileName = state.activeFileName || "(none)";
+    let fileView = "";
+    if(state.activeFileId){
+      const n = nodeById(state.activeFileId);
+      if(n && n.type==="file"){
+        fileView = renderTables(n.content || "");
+      }
+    }
+
+    const printText =
+`print page
+
+user: ${state.user}
+cwd: ${cwd}
+file: ${fileName}
+
+file view:
+${fileView}
+`;
+
+    const safe = escapeHtml(printText);
+
+    // IMPORTANT: use menlo; wrap long lines; white paper for printing
+    const html = `<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>print</title>
+<style>
+body{font-family:menlo,monospace;font-size:12px;margin:40px;color:#000;background:#fff;}
+pre{
+  white-space:pre-wrap;
+  word-wrap:break-word;
+  overflow-wrap:anywhere;
+  font-family:menlo,monospace;
+  font-size:12px;
+}
+</style>
+</head><body>
+<pre>${safe}</pre>
+<script>setTimeout(()=>{window.print()},400)<\/script>
+</body></html>`;
+
+    const blob = new Blob([html], {type:"text/html"});
+    const url = URL.createObjectURL(blob);
+    window.open(url, "_blank");
+    addSys("print ready");
+    return;
+  }
+
+  // form system
+  if(cmd === "entry" && args[0]==="directory"){
+    if(formForDirCompleted(state.cwdId)){
+      addSys("error: form already completed in this directory");
+      return;
+    }
+    if(formForDirDraft(state.cwdId)){
+      addSys("error: draft already exists. use complete form or cancelform");
+      return;
+    }
+    state.wizard = {mode:"formname", dirId: state.cwdId, name:"", questions:[]};
+    addSys("form name?");
+    return;
+  }
+
+  if(cmd === "complete" && args[0]==="form"){
+    const d = formForDirDraft(state.cwdId);
+    if(!d){ addSys("error: no draft form in this directory"); return; }
+    if(!d.name || d.questions.length===0){
+      addSys("error: draft incomplete");
+      return;
+    }
+    d.status = "completed";
+    d.version = versionForForm(d.name, d.questions);
+    saveAll();
+    addSys("form completed");
+    emitFormInfoIfAny(state.cwdId);
+    return;
+  }
+
+  if(cmd === "cancelform"){
+    const d = formForDirDraft(state.cwdId);
+    if(!d){ addSys("error: no draft form"); return; }
+    state.forms = state.forms.filter(f=>!(f.dirId===state.cwdId && f.status==="draft"));
+    state.wizard = null;
+    saveAll();
+    addSys("draft discarded");
+    return;
+  }
+
+  if(cmd === "answer"){
+    if(args.length < 2){ addSys("error: answer <q#> <text...>"); return; }
+    const f = formForDirCompleted(state.cwdId);
+    if(!f){ addSys("error: no completed form in this directory"); return; }
+    const qraw = args[0].replace("q","");
+    const qn = parseInt(qraw,10);
+    if(!Number.isFinite(qn) || qn < 1 || qn > f.questions.length){
+      addSys("error: invalid question number");
+      return;
+    }
+    const text = joinRest(args.slice(1));
+    state.currentAnswers[qn] = text;
+    addSys(`ok (q${qn})`);
+    return;
+  }
+
+  if(cmd === "clearanswers"){
+    state.currentAnswers = {};
+    addSys("ok");
+    return;
+  }
+
+  if(cmd === "submit"){
+    const f = formForDirCompleted(state.cwdId);
+    if(!f){ addSys("error: no completed form in this directory"); return; }
+    for(let i=1;i<=f.questions.length;i++){
+      if(!state.currentAnswers[i] || state.currentAnswers[i].trim()===""){
+        addSys(`error: missing answer q${i}`);
+        return;
+      }
+    }
+    const id = crypto.randomUUID().slice(0,8);
+    const answers = {};
+    for(let i=1;i<=f.questions.length;i++){
+      answers["q"+i] = state.currentAnswers[i];
+    }
+    state.submissions.push({
+      id,
+      dirId: state.cwdId,
+      formVersion: f.version,
+      answers,
+      createdAt: nowIso()
+    });
+    state.currentAnswers = {};
+    saveAll();
+    addSys(`saved submission ${id}`);
+    return;
+  }
+
+  if(cmd === "submissions"){
+    const f = formForDirCompleted(state.cwdId);
+    if(!f){ addSys("error: no completed form in this directory"); return; }
+    const items = state.submissions
+      .filter(s=>s.dirId===state.cwdId)
+      .slice(-20)
+      .reverse();
+    if(items.length===0){ addSys("(none)"); return; }
+    items.forEach(s=> addSys(`${s.id} ${s.createdAt}`));
+    return;
+  }
+
+  if(cmd === "view"){
+    if(args.length<1){ addSys("error: view <id>"); return; }
+    const id = args[0];
+    const s = state.submissions.find(x=>x.id===id && x.dirId===state.cwdId);
+    if(!s){ addSys("not found"); return; }
+    const f = formForDirCompleted(state.cwdId);
+    const questions = f ? f.questions : [];
+    addSys(`submission ${s.id}`);
+    questions.forEach((q,i)=>{
+      const key = "q"+(i+1);
+      addSys(`q${i+1}: ${q}`);
+      addSys(`${s.answers[key] ?? ""}`);
+    });
+    return;
+  }
+
+  addSys("unknown command");
+}
+
+/* =========================
+   edit mode handler
+========================= */
+function handleEditLine(line){
+  // edit mode commands are: done / cancel
+  // everything else is treated as text, with inline table markers support
+
+  const t = lc(line).trim();
+
+  if(t === "done"){
+    const file = nodeById(state.edit.fileId);
+    if(file && file.type==="file"){
+      file.content = state.edit.bufferLines.join("\n");
+      saveAll();
+      addSys("saved");
+    } else {
+      addSys("error: file missing");
+    }
+    state.edit = null;
+    return;
+  }
+
+  if(t === "cancel"){
+    state.edit = null;
+    addSys("canceled");
+    return;
+  }
+
+  // if user types markers on a line, we store them as standalone markers
+  // and allow continuing text after tables.
+  if(t.includes("{writetbl}")){
+    state.edit.bufferLines.push("{writetbl}");
+    state.edit.inTable = true;
+    addSys("(table mode: type rows like: name | age | id. then {endtbl})");
+    return;
+  }
+
+  if(t.includes("{endtbl}")){
+    state.edit.bufferLines.push("{endtbl}");
+    state.edit.inTable = false;
+    addSys("(table ended)");
+    return;
+  }
+
+  // normal text line
+  state.edit.bufferLines.push(line);
+}
+
+/* =========================
+   wizard handler
+========================= */
+function handleWizardLine(line){
+  const t = lc(line).trim();
+
+  if(state.wizard.mode === "formname"){
+    if(!t){ addSys("form name?"); return; }
+    state.wizard.name = t;
+    state.wizard.mode = "questions";
+    addSys("add question (or type done)?");
+    return;
+  }
+
+  if(state.wizard.mode === "questions"){
+    if(t === "done"){
+      if(state.wizard.questions.length === 0){
+        addSys("error: add at least one question");
+        addSys("add question (or type done)?");
+        return;
+      }
+      const form = {
+        dirId: state.wizard.dirId,
+        status: "draft",
+        name: state.wizard.name,
+        questions: state.wizard.questions.slice(),
+        version: "",
+        createdAt: nowIso()
+      };
+      state.forms.push(form);
+      state.wizard = null;
+      saveAll();
+      addSys("draft saved. run: complete form");
+      return;
+    }
+    // add question
+    if(!t){ addSys("add question (or type done)?"); return; }
+    state.wizard.questions.push(t);
+    addSys("add question (or type done)?");
+    return;
+  }
+}
+
+/* =========================
+   boot
+========================= */
+(async function boot(){
+  await loadAll();
+
+  const buildId = nowIso();
+  const rid = crypto.randomUUID().slice(0,12);
+
+  sessionStartIndex = transcript.length;
+
+  addSys("data cli loaded");
+  addSys("build: " + buildId);
+  addSys("rid: " + rid);
+  addSys("");
+  addSys("tap anywhere, type, press enter");
+  addSys("type commandls to list commands");
+  addSys("type cmmdhelp for descriptions");
+  addSys("tip: use open <file> to set active file for printpg");
+  addSys("tip: use edit <file> to write multi-line text");
+  addSys("tip: inside edit use {writetbl} ... {endtbl}");
+  addSys("tip: preview <file> shows rendered output");
+  addSys("");
+
+  render();
+  // don't hard auto-focus (ios blocks). user tap triggers focus. try once softly:
+  setTimeout(()=>{ try{ input.focus(); }catch(e){} }, 700);
+})();
+</script>
+</body>
+</html><!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>data cli</title>
+
+<style>
+:root{ --bg:#000; --text:#fff; }
+@media (prefers-color-scheme: light){
+  :root{ --bg:#e6e6e6; --text:#000; }
+}
+
+html,body{
+  height:100%;
+  margin:0;
+  background:var(--bg);
+  color:var(--text);
+  font-family:menlo,monospace;
+  font-size:12px;
+  overflow:hidden; /* stop page scroll when typing */
+}
+
+#terminal{
+  position:fixed;
+  inset:0;
+  padding:12px;
+  overflow-y:auto;
+  white-space:pre-wrap;
+  -webkit-overflow-scrolling:touch;
+}
+
+/* important: keep input INSIDE viewport so ios will focus it reliably */
+#hiddenInput{
+  position:fixed;
+  left:8px;
+  bottom:8px;
+  width:10px;
+  height:10px;
+  opacity:0;          /* invisible */
+  background:transparent;
+  color:transparent;
+  border:0;
+  outline:0;
+  caret-color:transparent;
+  -webkit-text-fill-color:transparent;
+}
+
+/* tap catcher */
+#tapCatcher{
+  position:fixed;
+  inset:0;
+  background:transparent;
+}
+
+/* small hint that disappears after focus */
+#hint{
+  position:fixed;
+  left:12px;
+  bottom:12px;
+  opacity:0.65;
+  pointer-events:none;
+  user-select:none;
+}
+</style>
+</head>
+
+<body>
+
+<div id="terminal"></div>
+<div id="tapCatcher" aria-hidden="true"></div>
+<div id="hint">tap to type</div>
+<input id="hiddenInput" type="text" autocapitalize="none" autocomplete="off" autocorrect="off" spellcheck="false" inputmode="text">
+
+<script>
+const terminal = document.getElementById("terminal");
+const input = document.getElementById("hiddenInput");
+const tap = document.getElementById("tapCatcher");
+const hint = document.getElementById("hint");
+
+let history = [];
+let current = "";
+
+function lc(s){ return (s??"").toString().toLowerCase(); }
+function push(t){ history.push(lc(t)); }
+
+function render(){
+  terminal.textContent = history.join("\n") + "\n> " + current + "_"; // non-blinking cursor
+  terminal.scrollTop = terminal.scrollHeight;
+}
+
+function focusInput(){
+  // must be called from a user gesture to reliably open keyboard on ios
+  input.focus();
+  // small retry helps ios webviews
+  setTimeout(()=>input.focus(), 30);
+  setTimeout(()=>input.focus(), 120);
+
+  // hide hint once we have focus
+  setTimeout(()=>{
+    if(document.activeElement === input) hint.style.display="none";
+  }, 80);
+}
+
+// focus on tap anywhere
+tap.addEventListener("touchstart", focusInput, {passive:true});
+tap.addEventListener("pointerdown", focusInput, {passive:true});
+terminal.addEventListener("touchstart", focusInput, {passive:true});
+terminal.addEventListener("pointerdown", focusInput, {passive:true});
+
+// if the page becomes visible again, try to refocus
+document.addEventListener("visibilitychange", ()=>{
+  if(!document.hidden) setTimeout(focusInput, 150);
+});
+
+// keep text lowercase while typing
+input.addEventListener("input", ()=>{
+  current = lc(input.value);
+  if(input.value !== current) input.value = current;
+  render();
+});
+
+input.addEventListener("keydown", (e)=>{
+  if(e.key === "Enter"){
+    e.preventDefault();
+    const line = lc(current).trim();
+    if(line){
+      history.push("> " + line);
+      run(line);
+    }
+    current = "";
+    input.value = "";
+    render();
+  }
+});
+
+function run(cmd){
+  const p = cmd.split(" ").filter(Boolean);
+  const c = p[0];
+
+  if(c === "commandls"){
+    push("commands:");
+    push("commandls");
+    push("cmmdhelp");
+    push("clear");
+    push("whoami");
+    push("pwd");
+    push("printpg");
+  } else if(c === "cmmdhelp"){
+    push("commandls : list commands");
+    push("cmmdhelp : descriptions");
+    push("clear : clear terminal");
+    push("whoami : show user");
+    push("pwd : show directory");
+    push("printpg : print page");
+  } else if(c === "clear"){
+    history = [];
+  } else if(c === "whoami"){
+    push("operator");
+  } else if(c === "pwd"){
+    push("/");
+  } else if(c === "printpg"){
+    const text =
+`print page
+
+user: operator
+cwd: /
+`;
+
+    const safe = text
+      .replaceAll("&","&amp;")
+      .replaceAll("<","&lt;")
+      .replaceAll(">","&gt;");
+
+    // printing: white paper + black text, menlo
+    const html = `<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+body{font-family:menlo,monospace;font-size:12px;margin:40px;color:#000;background:#fff;}
+pre{white-space:pre-wrap;word-wrap:break-word;font-family:menlo,monospace;font-size:12px;}
+</style></head><body><pre>${safe}</pre>
+<script>setTimeout(()=>{window.print()},400)<\/script>
+</body></html>`;
+
+    const blob = new Blob([html], {type:"text/html"});
+    const url = URL.createObjectURL(blob);
+    window.open(url, "_blank");
+    push("print ready");
+  } else {
+    push("unknown command");
+  }
+}
+
+// boot
+push("data cli ready");
+push("type commandls to list commands");
+push("type cmmdhelp for descriptions");
+render();
+
+// IMPORTANT: don't auto-focus immediately (ios may block it). user taps to type.
+// but we can try once after a moment; if blocked, hint remains.
+setTimeout(()=>{ try{ input.focus(); }catch(e){} }, 600);
+</script>
+
+</body>
+</html><!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>data cli</title>
+
+<style>
+:root{ --bg:#000; --text:#fff; }
+@media (prefers-color-scheme: light){
+  :root{ --bg:#e6e6e6; --text:#000; }
+}
+
+html,body{
+  height:100%;
+  margin:0;
+  background:var(--bg);
+  color:var(--text);
+  font-family:menlo,monospace;
+  font-size:12px;
+  overflow:hidden;
+}
+
+#terminal{
+  position:fixed;
+  inset:0;
+  padding:12px;
+  overflow-y:auto;
+  white-space:pre-wrap;
+  -webkit-overflow-scrolling:touch;
+}
+
+/* hidden input so ios keyboard works */
+#hiddenInput{
+  position:fixed;
+  left:-9999px;
+  width:1px;
+  height:1px;
+  opacity:0;
+  border:0;
+  padding:0;
+  margin:0;
+}
+
+#tapCatcher{
+  position:fixed;
+  inset:0;
+  background:transparent;
+}
+</style>
+</head>
+
+<body>
+
+<div id="terminal"></div>
+<div id="tapCatcher" aria-hidden="true"></div>
+<input id="hiddenInput" type="text" autocapitalize="none" autocomplete="off" autocorrect="off" spellcheck="false">
+
+<script>
+const terminal = document.getElementById("terminal");
+const input = document.getElementById("hiddenInput");
+const tap = document.getElementById("tapCatcher");
+
+let history = [];
+let current = "";
+
+function lc(s){ return (s??"").toString().toLowerCase(); }
+function push(t){ history.push(lc(t)); }
+
+function render(){
+  // non-blinking underscore cursor always visible
+  terminal.textContent = history.join("\n") + "\n> " + current + "_";
+  terminal.scrollTop = terminal.scrollHeight;
+}
+
+function focus(){
+  input.focus();
+  setTimeout(()=>input.focus(), 50); // helps ios sometimes
+}
+
+tap.addEventListener("pointerdown", focus, {passive:true});
+tap.addEventListener("touchstart", focus, {passive:true});
+terminal.addEventListener("pointerdown", focus, {passive:true});
+terminal.addEventListener("touchstart", focus, {passive:true});
+
+input.addEventListener("input", ()=>{
+  current = lc(input.value);
+  if(input.value !== current) input.value = current; // force lowercase
+  render();
+});
+
+input.addEventListener("keydown", (e)=>{
+  if(e.key === "Enter"){
+    e.preventDefault();
+    const line = lc(current).trim();
+    if(line){
+      history.push("> " + line);
+      run(line);
+    }
+    current = "";
+    input.value = "";
+    render();
+  }
+});
+
+function run(cmd){
+  const p = cmd.split(" ").filter(Boolean);
+  const c = p[0];
+
+  if(c === "commandls"){
+    push("commands:");
+    push("commandls");
+    push("cmmdhelp");
+    push("clear");
+    push("whoami");
+    push("pwd");
+    push("printpg");
+  } else if(c === "cmmdhelp"){
+    push("commandls : list commands");
+    push("cmmdhelp : descriptions");
+    push("clear : clear terminal");
+    push("whoami : show user");
+    push("pwd : show directory");
+    push("printpg : print page");
+  } else if(c === "clear"){
+    history = [];
+  } else if(c === "whoami"){
+    push("operator");
+  } else if(c === "pwd"){
+    push("/");
+  } else if(c === "printpg"){
+    const text =
+`print page
+
+user: operator
+cwd: /
+`;
+
+    // print uses white paper + black text (saves ink) but keeps menlo
+    const html = `<!doctype html><html><head><meta charset="utf-8">
+<style>
+body{font-family:menlo,monospace;font-size:12px;margin:40px;color:#000;background:#fff;}
+pre{white-space:pre-wrap;word-wrap:break-word;font-family:menlo,monospace;font-size:12px;}
+</style></head><body><pre>${text.replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;")}</pre>
+<script>setTimeout(()=>{window.print()},400)<\/script>
+</body></html>`;
+
+    const blob = new Blob([html], {type:"text/html"});
+    const url = URL.createObjectURL(blob);
+    window.open(url, "_blank");
+    push("print ready");
+  } else {
+    push("unknown command");
+  }
+}
+
+push("data cli ready");
+push("type commandls to list commands");
+push("type cmmdhelp for descriptions");
+render();
+setTimeout(focus, 300);
+</script>
+
+</body>
+</html>
