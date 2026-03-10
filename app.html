@@ -2,34 +2,147 @@
 <html>
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <title>spirenet</title>
 
-<link rel="stylesheet" href="style.css">
+<style>
 
+html,body{
+  margin:0;
+  height:100%;
+  background:black;
+  color:white;
+  font-family:Menlo, monospace;
+}
+
+header{
+  padding:16px;
+  border-bottom:1px solid #222;
+  font-size:14px;
+  letter-spacing:2px;
+  text-transform:lowercase;
+}
+
+#terminal{
+  padding:20px;
+  height:calc(100vh - 60px);
+  overflow-y:auto;
+}
+
+.line{
+  margin-bottom:6px;
+}
+
+.prompt{
+  display:flex;
+}
+
+.prompt span{
+  margin-right:8px;
+}
+
+input{
+  background:black;
+  border:none;
+  color:white;
+  outline:none;
+  font-family:Menlo, monospace;
+  font-size:14px;
+  width:100%;
+}
+
+</style>
 </head>
 
 <body>
 
-<div id="terminal"></div>
+<header>
+spirenet
+</header>
 
-<div id="tapCatcher"></div>
+<div id="terminal">
 
-<div id="hint">
-tap to type
+<div class="line">
+spirenet node connected
 </div>
 
-<input
-id="hiddenInput"
-type="text"
-autocapitalize="none"
-autocomplete="off"
-autocorrect="off"
-spellcheck="false"
-inputmode="text"
->
+<div class="line">
+type "help" for commands
+</div>
 
-<script src="spirenet.js"></script>
+<div class="prompt">
+<span>></span>
+<input id="commandInput" autocomplete="off" autofocus>
+</div>
+
+</div>
+
+<script>
+
+const input = document.getElementById("commandInput");
+const terminal = document.getElementById("terminal");
+
+function print(text){
+  const div = document.createElement("div");
+  div.className = "line";
+  div.textContent = text;
+  terminal.insertBefore(div, input.parentElement);
+}
+
+function newPrompt(){
+  const prompt = document.createElement("div");
+  prompt.className = "prompt";
+
+  const span = document.createElement("span");
+  span.textContent = ">";
+
+  const inp = document.createElement("input");
+  inp.autocomplete = "off";
+
+  prompt.appendChild(span);
+  prompt.appendChild(inp);
+  terminal.appendChild(prompt);
+
+  inp.focus();
+
+  inp.addEventListener("keydown", handleCommand);
+}
+
+function handleCommand(e){
+
+  if(e.key !== "Enter") return;
+
+  const cmd = e.target.value.trim().toLowerCase();
+
+  e.target.disabled = true;
+
+  if(cmd === "help"){
+    print("commands:");
+    print("help");
+    print("status");
+    print("clear");
+  }
+
+  else if(cmd === "status"){
+    print("node authenticated");
+    print("network status: active");
+  }
+
+  else if(cmd === "clear"){
+    terminal.innerHTML = "";
+  }
+
+  else{
+    print("unknown command");
+  }
+
+  newPrompt();
+
+}
+
+input.addEventListener("keydown", handleCommand);
+
+</script>
 
 </body>
 </html>
