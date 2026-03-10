@@ -1,175 +1,86 @@
-if(sessionStorage.getItem("spirenet_usb_verified") !== "true"){
-  window.location.href = "index.html";
+/* =======================================
+   SPIRENET USB ACCESS GATE
+======================================= */
+
+if (localStorage.getItem("spirenet_usb_verified") !== "true") {
+    window.location.href = "index.html";
 }
 
-const APP_NAME = "spirenet";
+/* =======================================
+   SPIRENET INTERFACE CORE
+======================================= */
 
-const terminal = document.getElementById("terminal");
-const input = document.getElementById("hiddenInput");
-const tap = document.getElementById("tapCatcher");
-const hint = document.getElementById("hint");
+document.addEventListener("DOMContentLoaded", () => {
 
-let history = [];
-let current = "";
+    const terminal = document.getElementById("terminal");
+    const input = document.getElementById("commandInput");
 
-function lc(value){
-  return (value ?? "").toString().toLowerCase();
-}
-
-function push(line){
-  history.push(lc(line));
-}
-
-function render(){
-  terminal.textContent = history.join("\n") + "\n> " + current + "_";
-  terminal.scrollTop = terminal.scrollHeight;
-}
-
-function focusInput(){
-  input.focus();
-  setTimeout(() => input.focus(), 30);
-  setTimeout(() => input.focus(), 120);
-
-  setTimeout(() => {
-    if(document.activeElement === input){
-      hint.style.display = "none";
-    }
-  }, 80);
-}
-
-tap.addEventListener("touchstart", focusInput, { passive: true });
-tap.addEventListener("pointerdown", focusInput, { passive: true });
-terminal.addEventListener("touchstart", focusInput, { passive: true });
-terminal.addEventListener("pointerdown", focusInput, { passive: true });
-
-input.addEventListener("input", () => {
-  current = lc(input.value);
-  if(input.value !== current){
-    input.value = current;
-  }
-  render();
-});
-
-input.addEventListener("keydown", (event) => {
-  if(event.key === "Enter"){
-    event.preventDefault();
-
-    const line = lc(current).trim();
-
-    if(line){
-      history.push("> " + line);
-      run(line);
+    function printLine(text){
+        const line = document.createElement("div");
+        line.textContent = text;
+        terminal.appendChild(line);
+        terminal.scrollTop = terminal.scrollHeight;
     }
 
-    current = "";
-    input.value = "";
-    render();
-  }
+    function printPrompt(){
+        const prompt = document.createElement("div");
+        prompt.textContent = "> ";
+        terminal.appendChild(prompt);
+    }
+
+    function handleCommand(cmd){
+
+        cmd = cmd.trim().toLowerCase();
+
+        if(cmd === "help"){
+            printLine("available commands:");
+            printLine("help");
+            printLine("status");
+            printLine("clear");
+            printLine("logout");
+        }
+
+        else if(cmd === "status"){
+            printLine("node status: connected");
+        }
+
+        else if(cmd === "clear"){
+            terminal.innerHTML = "";
+        }
+
+        else if(cmd === "logout"){
+            localStorage.removeItem("spirenet_usb_verified");
+            window.location.href = "index.html";
+        }
+
+        else{
+            printLine("unknown command");
+        }
+
+        printPrompt();
+    }
+
+    if(input){
+        input.addEventListener("keydown", function(e){
+
+            if(e.key === "Enter"){
+
+                const value = input.value;
+
+                const line = document.createElement("div");
+                line.textContent = "> " + value;
+                terminal.appendChild(line);
+
+                handleCommand(value);
+
+                input.value = "";
+            }
+
+        });
+    }
+
+    printLine("spireNet interface initialized");
+    printLine("type 'help' for commands");
+    printPrompt();
+
 });
-
-function run(commandLine){
-  const parts = commandLine.split(" ").filter(Boolean);
-  const command = parts[0];
-
-  if(command === "commandls"){
-    push("commands:");
-    push("commandls");
-    push("cmmdhelp");
-    push("clear");
-    push("whoami");
-    push("pwd");
-    push("printpg");
-    return;
-  }
-
-  if(command === "cmmdhelp"){
-    push("commandls : list commands");
-    push("cmmdhelp : command descriptions");
-    push("clear : clear terminal");
-    push("whoami : show current user");
-    push("pwd : show current directory");
-    push("printpg : open print view");
-    return;
-  }
-
-  if(command === "clear"){
-    history = [];
-    return;
-  }
-
-  if(command === "whoami"){
-    push("operator");
-    return;
-  }
-
-  if(command === "pwd"){
-    push("/spirenet");
-    return;
-  }
-
-  if(command === "printpg"){
-    openPrintPage();
-    push("print ready");
-    return;
-  }
-
-  push("unknown command");
-}
-
-function openPrintPage(){
-  const text = `print page
-
-user: operator
-cwd: /spirenet
-`;
-
-  const safe = text
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
-
-  const html = `<!doctype html>
-<html>
-<head>
-<meta charset="utf-8">
-<title>print</title>
-<style>
-body{
-  font-family:menlo,monospace;
-  font-size:12px;
-  margin:40px;
-  color:#000;
-  background:#fff;
-}
-pre{
-  white-space:pre-wrap;
-  word-wrap:break-word;
-  font-family:menlo,monospace;
-  font-size:12px;
-}
-</style>
-</head>
-<body>
-<pre>${safe}</pre>
-<script>
-setTimeout(()=>{window.print()},400)
-<\/script>
-</body>
-</html>`;
-
-  const blob = new Blob([html], { type: "text/html" });
-  const url = URL.createObjectURL(blob);
-  window.open(url, "_blank");
-}
-
-push(APP_NAME + " ready");
-push('type "commandls" to list commands');
-push('type "cmmdhelp" for descriptions');
-
-render();
-
-setTimeout(() => {
-  try{
-    input.focus();
-  }catch(error){}
-}, 700);
