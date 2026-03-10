@@ -1,0 +1,263 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>spirenet</title>
+
+<style>
+
+:root{
+  --bg:#000;
+  --text:#fff;
+  --dim:rgba(255,255,255,0.65);
+}
+
+@media (prefers-color-scheme: light){
+  :root{
+    --bg:#e6e6e6;
+    --text:#000;
+    --dim:rgba(0,0,0,0.65);
+  }
+}
+
+html,body{
+  height:100%;
+  margin:0;
+  background:var(--bg);
+  color:var(--text);
+  font-family:menlo,monospace;
+  font-size:12px;
+  overflow:hidden;
+}
+
+#terminal{
+  position:fixed;
+  inset:0;
+  padding:12px 40px;
+  overflow-y:auto;
+  white-space:pre-wrap;
+  -webkit-overflow-scrolling:touch;
+}
+
+#tapCatcher{
+  position:fixed;
+  inset:0;
+  background:transparent;
+}
+
+#hint{
+  position:fixed;
+  left:12px;
+  bottom:12px;
+  opacity:0.65;
+  pointer-events:none;
+  user-select:none;
+  color:var(--dim);
+}
+
+#hiddenInput{
+  position:fixed;
+  left:8px;
+  bottom:8px;
+  width:10px;
+  height:10px;
+  opacity:0;
+  background:transparent;
+  color:transparent;
+  border:0;
+  outline:0;
+  caret-color:transparent;
+  -webkit-text-fill-color:transparent;
+}
+
+</style>
+</head>
+
+<body>
+
+<div id="terminal"></div>
+<div id="tapCatcher"></div>
+<div id="hint">tap to type</div>
+
+<input id="hiddenInput"
+type="text"
+autocapitalize="none"
+autocomplete="off"
+autocorrect="off"
+spellcheck="false"
+inputmode="text">
+
+<script>
+
+/* USB gate protection */
+
+if(sessionStorage.getItem("spirenet_usb_verified")!=="true"){
+  window.location.href="index.html"
+}
+
+const APP_NAME="spirenet"
+const ADMIN_PASSWORD="16:34:20-stayputandoutoftheway8mv65qryop@"
+
+const terminal=document.getElementById("terminal")
+const input=document.getElementById("hiddenInput")
+const tap=document.getElementById("tapCatcher")
+const hint=document.getElementById("hint")
+
+let history=[]
+let current=""
+
+function lc(s){return(s??"").toString().toLowerCase()}
+
+function push(t){
+history.push(lc(t))
+}
+
+function render(){
+terminal.textContent=history.join("\n")+"\n> "+current+"_"
+terminal.scrollTop=terminal.scrollHeight
+}
+
+function focusInput(){
+input.focus()
+setTimeout(()=>input.focus(),30)
+setTimeout(()=>input.focus(),120)
+
+setTimeout(()=>{
+if(document.activeElement===input)
+hint.style.display="none"
+},80)
+}
+
+tap.addEventListener("touchstart",focusInput,{passive:true})
+tap.addEventListener("pointerdown",focusInput,{passive:true})
+terminal.addEventListener("touchstart",focusInput,{passive:true})
+terminal.addEventListener("pointerdown",focusInput,{passive:true})
+
+input.addEventListener("input",()=>{
+current=lc(input.value)
+if(input.value!==current) input.value=current
+render()
+})
+
+input.addEventListener("keydown",(e)=>{
+if(e.key==="Enter"){
+e.preventDefault()
+
+const line=lc(current).trim()
+
+if(line){
+history.push("> "+line)
+run(line)
+}
+
+current=""
+input.value=""
+
+render()
+}
+})
+
+function run(cmd){
+
+const p=cmd.split(" ").filter(Boolean)
+const c=p[0]
+
+if(c==="commandls"){
+
+push("commands:")
+push("commandls")
+push("cmmdhelp")
+push("clear")
+push("whoami")
+push("pwd")
+push("printpg")
+
+}
+
+else if(c==="cmmdhelp"){
+
+push("commandls : list commands")
+push("cmmdhelp : command descriptions")
+push("clear : clear terminal")
+push("whoami : show current user")
+push("pwd : show directory")
+push("printpg : open print view")
+
+}
+
+else if(c==="clear"){
+
+history=[]
+
+}
+
+else if(c==="whoami"){
+
+push("operator")
+
+}
+
+else if(c==="pwd"){
+
+push("/spirenet")
+
+}
+
+else if(c==="printpg"){
+
+const text=
+`print page
+
+user: operator
+cwd: /spirenet
+`
+
+const safe=text
+.replaceAll("&","&amp;")
+.replaceAll("<","&lt;")
+.replaceAll(">","&gt;")
+
+const html=`<!doctype html><html><head><meta charset="utf-8">
+<style>
+body{font-family:menlo,monospace;font-size:12px;margin:40px;color:#000;background:#fff;}
+pre{white-space:pre-wrap;word-wrap:break-word;font-family:menlo,monospace;font-size:12px;}
+</style>
+</head>
+<body>
+<pre>${safe}</pre>
+<script>setTimeout(()=>{window.print()},400)<\/script>
+</body>
+</html>`
+
+const blob=new Blob([html],{type:"text/html"})
+const url=URL.createObjectURL(blob)
+
+window.open(url,"_blank")
+
+push("print ready")
+
+}
+
+else{
+
+push("unknown command")
+
+}
+
+}
+
+push("spirenet ready")
+push("type commandls to list commands")
+push("type cmmdhelp for descriptions")
+
+render()
+
+setTimeout(()=>{
+try{input.focus()}catch(e){}
+},700)
+
+</script>
+
+</body>
+</html>
