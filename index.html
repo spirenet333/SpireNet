@@ -1,158 +1,97 @@
-<!DOCTYPE html>
+<!doctype html>
 <html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>spirenet access</title>
-
+<title>spirenet</title>
 <style>
 html,body{
-margin:0;
-height:100%;
-background:#000;
-color:#fff;
-font-family:Menlo,monospace;
-display:flex;
-align-items:center;
-justify-content:center;
-overflow:hidden;
+  margin:0;
+  height:100%;
+  background:#000;
+  color:#fff;
+  font-family:menlo,monospace;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  overflow:hidden;
 }
-
 #terminal{
-white-space:pre-wrap;
-font-size:16px;
+  white-space:pre-wrap;
+  font-size:16px;
+  line-height:1.6;
 }
-
 .cursor{
-display:inline-block;
-width:10px;
-background:#fff;
-animation:blink 1s infinite;
+  display:inline-block;
+  width:10px;
+  background:#fff;
+  vertical-align:middle;
 }
-
-@keyframes blink{
-0%{opacity:1}
-50%{opacity:0}
-100%{opacity:1}
-}
-
-.hidden{
-display:none;
-}
+.hidden{ display:none; }
 </style>
 </head>
-
 <body>
 
-<div id="terminal">
-spirenet node awaiting key...
+<div id="terminal">spirenet node awaiting key...
 
-press anywhere to insert key
-> <span class="cursor"></span>
-</div>
+tap anywhere to continue
+> <span class="cursor"></span></div>
 
-<input id="keyfile" class="hidden" type="file" accept=".json">
-<input id="sigfile" class="hidden" type="file" accept=".txt">
+<input id="keyfile" class="hidden" type="file" accept=".json,application/json">
 
 <script>
+const terminal = document.getElementById("terminal");
+const keyfile = document.getElementById("keyfile");
 
-const keyfile = document.getElementById("keyfile")
-const sigfile = document.getElementById("sigfile")
-const terminal = document.getElementById("terminal")
-
-let stage="key"
-
-function show(text){
-terminal.innerHTML=text.replace(/\n/g,"<br>")
-}
-
-document.addEventListener("click",()=>{
-if(stage==="key") keyfile.click()
-if(stage==="sig") sigfile.click()
-})
-
-document.addEventListener("keydown",(e)=>{
-if(e.key==="Enter"){
-if(stage==="key") keyfile.click()
-if(stage==="sig") sigfile.click()
-}
-})
-
-keyfile.addEventListener("change",()=>{
-stage="sig"
-show("key detected\n\ninsert signature\n> <span class='cursor'></span>")
-setTimeout(()=>sigfile.click(),200)
-})
-
-sigfile.addEventListener("change",verify)
-
-function verify(){
-
-const key=keyfile.files[0]
-const sig=sigfile.files[0]
-
-if(!key||!sig){
-fail()
-return
-}
-
-const r1=new FileReader()
-const r2=new FileReader()
-
-r1.onload=function(){
-
-r2.onload=function(){
-
-try{
-
-const k=JSON.parse(r1.result)
-const s=r2.result.trim()
-
-if(
-k.system==="SpireNet" &&
-k.key_id==="SPN-9F3A-2C81-7BD4-EE19-42A7" &&
-s==="SPN-SIGN-81A9-44F2-C11E-9920"
-){
-success()
-}
-else{
-fail()
-}
-
-}catch(e){
-fail()
-}
-
-}
-
-r2.readAsText(sig)
-
-}
-
-r1.readAsText(key)
-
-}
-
-function success(){
-
-sessionStorage.setItem("spirenet_usb_verified","true")
-
-show("access granted\n\nloading node...\n> <span class='cursor'></span>")
-
-setTimeout(()=>{
-window.location.href="app.html"
-},1500)
-
+function screen(text){
+  terminal.innerHTML = text.replace(/\n/g,"<br>");
 }
 
 function fail(){
-
-show("invalid key\n\npress anywhere to retry\n> <span class='cursor'></span>")
-
-stage="key"
-
+  sessionStorage.removeItem("spirenet_usb_verified");
+  screen("invalid key\n\ntap anywhere to retry\n> <span class='cursor'></span>");
 }
 
+function success(){
+  sessionStorage.setItem("spirenet_usb_verified","true");
+  screen("access granted\ninitializing node...\n> <span class='cursor'></span>");
+  setTimeout(()=>{ window.location.href="app.html"; }, 900);
+}
+
+// iOS requirement: file picker must be triggered by user gesture.
+// so: first tap anywhere opens it immediately.
+document.addEventListener("click", ()=> keyfile.click(), { once:false });
+document.addEventListener("keydown", (e)=>{
+  if(e.key === "Enter") keyfile.click();
+});
+
+keyfile.addEventListener("change", ()=>{
+  const f = keyfile.files && keyfile.files[0];
+  if(!f){ fail(); return; }
+
+  const r = new FileReader();
+  r.onload = ()=>{
+    try{
+      const k = JSON.parse(r.result);
+
+      const ok =
+        k.system === "SpireNet" &&
+        k.key_id === "SPN-9F3A-2C81-7BD4-EE19-42A7" &&
+        k.signature === "SPN-SIGN-81A9-44F2-C11E-9920";
+
+      if(ok) success();
+      else fail();
+
+    }catch(err){
+      fail();
+    }
+  };
+  r.readAsText(f);
+});
+
+// optional: try to open picker after load (many iOS builds block this)
+// so it won’t replace the tap, but it doesn’t hurt:
+setTimeout(()=>{ try{ keyfile.click(); }catch(e){} }, 600);
 </script>
 
 </body>
