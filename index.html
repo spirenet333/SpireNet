@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>spirenet</title>
+
+<style>
+html,body{
+margin:0;
+width:100%;
+height:100%;
+background:#000;
+color:#fff;
+font-family:Menlo,monospace;
+overflow:hidden;
+}
+
+body{
+display:flex;
+align-items:center;
+justify-content:center;
+}
+
+#terminal{
+text-align:left;
+font-size:18px;
+line-height:1.5;
+white-space:pre-wrap;
+}
+
+.cursor{
+display:inline-block;
+width:10px;
+background:#fff;
+vertical-align:middle;
+}
+
+.hidden{
+display:none;
+}
+</style>
+</head>
+
+<body>
+
+<div id="terminal">spirenet node awaiting key...
+> <span class="cursor"></span></div>
+
+<input class="hidden" type="file" id="keyfile" accept=".json">
+<input class="hidden" type="file" id="sigfile" accept=".txt">
+
+<script>
+
+const terminal=document.getElementById("terminal")
+const keyfile=document.getElementById("keyfile")
+const sigfile=document.getElementById("sigfile")
+
+let stage="key"
+
+function screen(text){
+terminal.innerHTML=text.replace(/\n/g,"<br>")
+}
+
+function invalid(){
+screen("invalid key\n\npress anywhere to retry\n> <span class='cursor'></span>")
+stage="key"
+}
+
+function granted(){
+screen("access granted\ninitializing node...\n> <span class='cursor'></span>")
+
+setTimeout(()=>{
+window.location.href="app.html"
+},1500)
+}
+
+document.addEventListener("click",()=>{
+if(stage==="key"){keyfile.click()}
+if(stage==="sig"){sigfile.click()}
+})
+
+document.addEventListener("keydown",(e)=>{
+if(e.key==="Enter"){
+if(stage==="key"){keyfile.click()}
+if(stage==="sig"){sigfile.click()}
+}
+})
+
+keyfile.addEventListener("change",()=>{
+stage="sig"
+screen("key detected\nawaiting signature...\n> <span class='cursor'></span>")
+setTimeout(()=>sigfile.click(),100)
+})
+
+sigfile.addEventListener("change",verify)
+
+function verify(){
+
+const k=keyfile.files[0]
+const s=sigfile.files[0]
+
+if(!k||!s){invalid();return}
+
+const r1=new FileReader()
+const r2=new FileReader()
+
+r1.onload=function(){
+
+r2.onload=function(){
+
+try{
+
+const key=JSON.parse(r1.result)
+const sig=r2.result.trim()
+
+if(
+key.system==="SpireNet" &&
+key.key_id==="SPN-9F3A-2C81-7BD4-EE19-42A7" &&
+sig==="SPN-SIGN-81A9-44F2-C11E-9920"
+){
+granted()
+}else{
+invalid()
+}
+
+}catch(e){invalid()}
+
+}
+
+r2.readAsText(s)
+
+}
+
+r1.readAsText(k)
+
+}
+
+</script>
+
+</body>
+</html>
