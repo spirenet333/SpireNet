@@ -138,6 +138,7 @@ async function verifyWithWorker(){
   try{
     const res = await fetch(WORKER_URL, {
       method: "POST",
+      mode: "cors",
       headers: {
         "content-type": "application/json"
       },
@@ -232,3 +233,4 @@ contacting verification server...
 
 </body>
 </html>
+
