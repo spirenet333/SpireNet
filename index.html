@@ -7,177 +7,227 @@
 
 <style>
 html,body{
-margin:0;
-height:100%;
-background:black;
-color:white;
-font-family:Menlo, monospace;
-display:flex;
-align-items:center;
-justify-content:center;
-overflow:hidden;
+  margin:0;
+  height:100%;
+  background:black;
+  color:white;
+  font-family:Menlo, monospace;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  overflow:hidden;
 }
 
 #terminal{
-white-space:pre-wrap;
-font-size:16px;
-line-height:1.6;
-text-align:left;
+  white-space:pre-wrap;
+  font-size:16px;
+  line-height:1.6;
+  text-align:left;
+  max-width:700px;
 }
 
 .cursor{
-display:inline-block;
-width:10px;
-background:white;
-animation:blink 1s infinite;
+  display:inline-block;
+  width:10px;
+  background:white;
+  animation:blink 1s infinite;
+  vertical-align:middle;
 }
 
 @keyframes blink{
-0%{opacity:0}
-50%{opacity:1}
-100%{opacity:0}
+  0%{opacity:0}
+  50%{opacity:1}
+  100%{opacity:0}
 }
 
 .hidden{
-display:none;
+  display:none;
 }
 </style>
 </head>
-
 <body>
 
-<div id="terminal">
-spirenet node awaiting key...
+<div id="terminal">spirenet node awaiting key...
 
 tap anywhere to begin
->
-<span class="cursor"></span>
-</div>
+> <span class="cursor"></span></div>
 
 <input id="fileInput" class="hidden" type="file">
 
 <script>
+const terminal = document.getElementById("terminal");
+const fileInput = document.getElementById("fileInput");
 
-const terminal = document.getElementById("terminal")
-const fileInput = document.getElementById("fileInput")
+let stage = 0;
+let keyText = "";
+let authText = "";
+let sigText = "";
 
-let stage = 0
-
-const KEY =
-`7A91C3B7F4E21D9A0A62D3E8F3C2A4419C8F72E0B6F11A3A0D5E98B82A9F1E7C
-92F4E10BC3A7D8E9F1A2C33B7E91D6A5B0E8A1F72C9D33B7A81F02D5E7C6A1B4
-1F8C2B90E4D1A7B3F6C9D82A0B11E7A92F3C7D1A4E8B0C6F3D1A8B7E29F4A6C2
-C8E9D0A1B4F7C2D6A81E39F02D5B7A9C4E1F6A3B8D2E0F9A1C7B3E4D2F6A8B0C
-A91F2B7E0C3D8F4A6E1B9D3C7A5F2E8D0C1B7A6E3F9D4B8A1C6E2F7A3D9B0C4E`
-
-const AUTH =
-`SPIRENET_NODE_VERIFICATION
-AUTHORIZED_DEVICE`
-
-const SIG =
-`SPN-AUTH-9921-FE81-AC77-991E`
+const WORKER_URL = "https://spirenet-auth.experimental-acs.workers.dev";
 
 function screen(text){
-terminal.innerHTML=text+"<br><span class='cursor'></span>"
+  terminal.innerHTML = text.replace(/\n/g,"<br>") + "<br><span class='cursor'></span>";
 }
 
-document.addEventListener("click",()=>{
-fileInput.click()
-})
+function normalize(text){
+  return (text || "").replace(/\r\n/g,"\n").trim();
+}
 
-fileInput.addEventListener("change",()=>{
+function resetFlow(message){
+  localStorage.removeItem("spirenet_usb_verified");
+  stage = 0;
+  keyText = "";
+  authText = "";
+  sigText = "";
+  fileInput.value = "";
+  screen(
+`spirenet node rejected
 
-const file=fileInput.files[0]
-const reader=new FileReader()
-
-reader.onload=function(){
-
-const text=reader.result.trim()
-
-if(stage===0){
-
-if(file.name==="node_key.txt" && text===KEY.trim()){
-
-stage=1
-
-screen(`node key detected
-
-awaiting authorization file
->`)
-
-}else{
-
-screen(`invalid node key
+${message}
 
 tap anywhere to retry
->`)
-
-stage=0
-
+>`
+  );
 }
 
-}
-
-else if(stage===1){
-
-if(file.name==="node_auth.txt" && text===AUTH.trim()){
-
-stage=2
-
-screen(`authorization verified
-
-awaiting node signature
->`)
-
-}else{
-
-screen(`authorization failed
-
-tap anywhere to retry
->`)
-
-stage=0
-
-}
-
-}
-
-else if(stage===2){
-
-if(file.name==="node_sig.txt" && text===SIG.trim()){
-
-screen(`verifying node...
+function success(){
+  localStorage.setItem("spirenet_usb_verified","true");
+  screen(
+`verifying node...
 
 access granted
-entering network...`)
+entering network...
+>`
+  );
 
-/* THIS IS THE IMPORTANT PART */
-
-localStorage.setItem("spirenet_usb_verified","true")
-
-setTimeout(()=>{
-window.location.href="app.html"
-},1500)
-
-}else{
-
-screen(`signature invalid
-
-tap anywhere to retry
->`)
-
-stage=0
-
+  setTimeout(()=>{
+    window.location.href = "app.html";
+  },1200);
 }
 
+function updatePrompt(){
+  if(stage === 0){
+    screen(
+`spirenet node awaiting key...
+
+select node_key.txt
+>`
+    );
+  }
+
+  if(stage === 1){
+    screen(
+`node key accepted
+
+select node_auth.txt
+>`
+    );
+  }
+
+  if(stage === 2){
+    screen(
+`authorization accepted
+
+select node_sig.txt
+>`
+    );
+  }
 }
 
+async function verifyWithWorker(){
+  try{
+    const res = await fetch(WORKER_URL, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        key: keyText,
+        auth: authText,
+        sig: sigText
+      })
+    });
+
+    const data = await res.json();
+
+    if(data.status === "ok"){
+      success();
+    } else {
+      resetFlow("authentication failed");
+    }
+  } catch (err){
+    resetFlow("worker connection failed");
+  }
 }
 
-reader.readAsText(file)
+updatePrompt();
 
-})
+document.addEventListener("click", ()=>{
+  fileInput.click();
+});
 
+document.addEventListener("keydown", (e)=>{
+  if(e.key === "Enter"){
+    fileInput.click();
+  }
+});
+
+fileInput.addEventListener("change", ()=>{
+  const file = fileInput.files[0];
+
+  if(!file){
+    resetFlow("no file selected");
+    return;
+  }
+
+  const reader = new FileReader();
+
+  reader.onload = async function(){
+    const text = normalize(reader.result);
+
+    if(stage === 0){
+      if(file.name === "node_key.txt"){
+        keyText = text;
+        stage = 1;
+        fileInput.value = "";
+        updatePrompt();
+      } else {
+        resetFlow("expected node_key.txt");
+      }
+      return;
+    }
+
+    if(stage === 1){
+      if(file.name === "node_auth.txt"){
+        authText = text;
+        stage = 2;
+        fileInput.value = "";
+        updatePrompt();
+      } else {
+        resetFlow("expected node_auth.txt");
+      }
+      return;
+    }
+
+    if(stage === 2){
+      if(file.name === "node_sig.txt"){
+        sigText = text;
+        screen(
+`all node files received
+
+contacting verification server...
+>`
+        );
+        await verifyWithWorker();
+      } else {
+        resetFlow("expected node_sig.txt");
+      }
+      return;
+    }
+  };
+
+  reader.readAsText(file);
+});
 </script>
 
 </body>
