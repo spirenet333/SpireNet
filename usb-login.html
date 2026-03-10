@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>spirenet usb verification</title>
+
+<style>
+body{
+background:black;
+color:white;
+font-family:Menlo,monospace;
+font-size:14px;
+padding:40px;
+}
+
+.box{
+border:1px solid white;
+padding:20px;
+max-width:600px;
+}
+
+button{
+background:white;
+color:black;
+font-family:Menlo,monospace;
+padding:10px;
+cursor:pointer;
+}
+</style>
+
+</head>
+
+<body>
+
+<div class="box">
+
+<h2>spirenet usb verification</h2>
+
+<p>insert your spirenet usb key.</p>
+
+<p>select key.json</p>
+<input type="file" id="keyfile">
+
+<p>select signature.txt</p>
+<input type="file" id="sigfile">
+
+<br><br>
+
+<button onclick="verify()">verify usb key</button>
+
+<p id="result"></p>
+
+</div>
+
+<script>
+
+function verify(){
+
+const keyFile=document.getElementById("keyfile").files[0];
+const sigFile=document.getElementById("sigfile").files[0];
+
+if(!keyFile||!sigFile){
+document.getElementById("result").innerText="missing files";
+return;
+}
+
+const reader1=new FileReader();
+const reader2=new FileReader();
+
+reader1.onload=function(){
+reader2.onload=function(){
+
+try{
+
+const keyData=JSON.parse(reader1.result);
+const signature=reader2.result.trim();
+
+if(
+keyData.system==="SpireNet" &&
+keyData.key_id==="SPN-9F3A-2C81-7BD4-EE19-42A7" &&
+signature==="SPN-SIGN-81A9-44F2-C11E-9920"
+){
+
+document.getElementById("result").innerText="access granted";
+
+window.location.href="index.html";
+
+}else{
+
+document.getElementById("result").innerText="invalid key";
+
+}
+
+}catch(e){
+
+document.getElementById("result").innerText="invalid format";
+
+}
+
+}
+
+reader2.readAsText(sigFile);
+
+}
+
+reader1.readAsText(keyFile);
+
+}
+
+</script>
+
+</body>
+</html>
