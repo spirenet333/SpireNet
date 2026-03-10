@@ -3,37 +3,37 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>spirenet</title>
+<title>spirenet access</title>
 
 <style>
 html,body{
 margin:0;
-width:100%;
 height:100%;
 background:#000;
 color:#fff;
 font-family:Menlo,monospace;
-overflow:hidden;
-}
-
-body{
 display:flex;
 align-items:center;
 justify-content:center;
+overflow:hidden;
 }
 
 #terminal{
-text-align:left;
-font-size:18px;
-line-height:1.5;
 white-space:pre-wrap;
+font-size:16px;
 }
 
 .cursor{
 display:inline-block;
 width:10px;
 background:#fff;
-vertical-align:middle;
+animation:blink 1s infinite;
+}
+
+@keyframes blink{
+0%{opacity:1}
+50%{opacity:0}
+100%{opacity:1}
 }
 
 .hidden{
@@ -44,63 +44,57 @@ display:none;
 
 <body>
 
-<div id="terminal">spirenet node awaiting key...
-> <span class="cursor"></span></div>
+<div id="terminal">
+spirenet node awaiting key...
 
-<input class="hidden" type="file" id="keyfile" accept=".json">
-<input class="hidden" type="file" id="sigfile" accept=".txt">
+press anywhere to insert key
+> <span class="cursor"></span>
+</div>
+
+<input id="keyfile" class="hidden" type="file" accept=".json">
+<input id="sigfile" class="hidden" type="file" accept=".txt">
 
 <script>
 
-const terminal=document.getElementById("terminal")
-const keyfile=document.getElementById("keyfile")
-const sigfile=document.getElementById("sigfile")
+const keyfile = document.getElementById("keyfile")
+const sigfile = document.getElementById("sigfile")
+const terminal = document.getElementById("terminal")
 
 let stage="key"
 
-function screen(text){
+function show(text){
 terminal.innerHTML=text.replace(/\n/g,"<br>")
 }
 
-function invalid(){
-screen("invalid key\n\npress anywhere to retry\n> <span class='cursor'></span>")
-stage="key"
-}
-
-function granted(){
-screen("access granted\ninitializing node...\n> <span class='cursor'></span>")
-
-setTimeout(()=>{
-window.location.href="app.html"
-},1500)
-}
-
 document.addEventListener("click",()=>{
-if(stage==="key"){keyfile.click()}
-if(stage==="sig"){sigfile.click()}
+if(stage==="key") keyfile.click()
+if(stage==="sig") sigfile.click()
 })
 
 document.addEventListener("keydown",(e)=>{
 if(e.key==="Enter"){
-if(stage==="key"){keyfile.click()}
-if(stage==="sig"){sigfile.click()}
+if(stage==="key") keyfile.click()
+if(stage==="sig") sigfile.click()
 }
 })
 
 keyfile.addEventListener("change",()=>{
 stage="sig"
-screen("key detected\nawaiting signature...\n> <span class='cursor'></span>")
-setTimeout(()=>sigfile.click(),100)
+show("key detected\n\ninsert signature\n> <span class='cursor'></span>")
+setTimeout(()=>sigfile.click(),200)
 })
 
 sigfile.addEventListener("change",verify)
 
 function verify(){
 
-const k=keyfile.files[0]
-const s=sigfile.files[0]
+const key=keyfile.files[0]
+const sig=sigfile.files[0]
 
-if(!k||!s){invalid();return}
+if(!key||!sig){
+fail()
+return
+}
 
 const r1=new FileReader()
 const r2=new FileReader()
@@ -111,28 +105,51 @@ r2.onload=function(){
 
 try{
 
-const key=JSON.parse(r1.result)
-const sig=r2.result.trim()
+const k=JSON.parse(r1.result)
+const s=r2.result.trim()
 
 if(
-key.system==="SpireNet" &&
-key.key_id==="SPN-9F3A-2C81-7BD4-EE19-42A7" &&
-sig==="SPN-SIGN-81A9-44F2-C11E-9920"
+k.system==="SpireNet" &&
+k.key_id==="SPN-9F3A-2C81-7BD4-EE19-42A7" &&
+s==="SPN-SIGN-81A9-44F2-C11E-9920"
 ){
-granted()
-}else{
-invalid()
+success()
+}
+else{
+fail()
 }
 
-}catch(e){invalid()}
+}catch(e){
+fail()
+}
 
 }
 
-r2.readAsText(s)
+r2.readAsText(sig)
 
 }
 
-r1.readAsText(k)
+r1.readAsText(key)
+
+}
+
+function success(){
+
+sessionStorage.setItem("spirenet_usb_verified","true")
+
+show("access granted\n\nloading node...\n> <span class='cursor'></span>")
+
+setTimeout(()=>{
+window.location.href="app.html"
+},1500)
+
+}
+
+function fail(){
+
+show("invalid key\n\npress anywhere to retry\n> <span class='cursor'></span>")
+
+stage="key"
 
 }
 
