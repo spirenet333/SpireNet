@@ -75,6 +75,7 @@ function normalize(text){
 
 function resetFlow(message){
   localStorage.removeItem("spirenet_usb_verified");
+  localStorage.removeItem("spirenet_role");
   stage = 0;
   keyText = "";
   authText = "";
@@ -90,10 +91,14 @@ tap anywhere to retry
   );
 }
 
-function success(){
+function success(role){
   localStorage.setItem("spirenet_usb_verified","true");
+  localStorage.setItem("spirenet_role", role);
+
   screen(
 `verifying node...
+
+role accepted: ${role}
 
 access granted
 entering network...
@@ -152,7 +157,7 @@ async function verifyWithWorker(){
     const data = await res.json();
 
     if(data.status === "ok"){
-      success();
+      success(data.role || "operator");
     } else {
       resetFlow("authentication failed");
     }
@@ -233,4 +238,3 @@ contacting verification server...
 
 </body>
 </html>
-
