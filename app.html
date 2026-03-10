@@ -5,88 +5,29 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
 <title>spirenet</title>
 
-<style>
+<link rel="stylesheet" href="style.css">
 
-:root{
-  --bg:#000;
-  --text:#fff;
-  --dim:rgba(255,255,255,0.65);
-}
-
-@media (prefers-color-scheme: light){
-  :root{
-    --bg:#e6e6e6;
-    --text:#000;
-    --dim:rgba(0,0,0,0.65);
-  }
-}
-
-html,body{
-  height:100%;
-  margin:0;
-  background:var(--bg);
-  color:var(--text);
-  font-family:menlo,monospace;
-  font-size:12px;
-  overflow:hidden;
-}
-
-#terminal{
-  position:fixed;
-  inset:0;
-  padding:12px 40px;
-  overflow-y:auto;
-  white-space:pre-wrap;
-  -webkit-overflow-scrolling:touch;
-}
-
-#tapCatcher{
-  position:fixed;
-  inset:0;
-  background:transparent;
-}
-
-#hint{
-  position:fixed;
-  left:12px;
-  bottom:12px;
-  opacity:0.65;
-  pointer-events:none;
-  user-select:none;
-  color:var(--dim);
-}
-
-#hiddenInput{
-  position:fixed;
-  left:8px;
-  bottom:8px;
-  width:10px;
-  height:10px;
-  opacity:0;
-  background:transparent;
-  color:transparent;
-  border:0;
-  outline:0;
-  caret-color:transparent;
-  -webkit-text-fill-color:transparent;
-}
-
-</style>
 </head>
 
 <body>
 
 <div id="terminal"></div>
-<div id="tapCatcher"></div>
-<div id="hint">tap to type</div>
 
-<input id="hiddenInput"
+<div id="tapCatcher"></div>
+
+<div id="hint">
+tap to type
+</div>
+
+<input
+id="hiddenInput"
 type="text"
 autocapitalize="none"
 autocomplete="off"
 autocorrect="off"
 spellcheck="false"
-inputmode="text">
+inputmode="text"
+>
 
 <script src="spirenet.js"></script>
 
