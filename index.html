@@ -6,7 +6,6 @@
 <title>spirenet</title>
 
 <style>
-
 html,body{
 margin:0;
 height:100%;
@@ -23,6 +22,7 @@ overflow:hidden;
 white-space:pre-wrap;
 font-size:16px;
 line-height:1.6;
+text-align:left;
 }
 
 .cursor{
@@ -41,7 +41,6 @@ animation:blink 1s infinite;
 .hidden{
 display:none;
 }
-
 </style>
 </head>
 
@@ -78,10 +77,6 @@ AUTHORIZED_DEVICE`
 const SIG =
 `SPN-AUTH-9921-FE81-AC77-991E`
 
-let keyOK=false
-let authOK=false
-let sigOK=false
-
 function screen(text){
 terminal.innerHTML=text+"<br><span class='cursor'></span>"
 }
@@ -102,18 +97,23 @@ const text=reader.result.trim()
 if(stage===0){
 
 if(file.name==="node_key.txt" && text===KEY.trim()){
-keyOK=true
+
 stage=1
+
 screen(`node key detected
 
 awaiting authorization file
 >`)
+
 }else{
+
 screen(`invalid node key
 
 tap anywhere to retry
 >`)
+
 stage=0
+
 }
 
 }
@@ -121,18 +121,23 @@ stage=0
 else if(stage===1){
 
 if(file.name==="node_auth.txt" && text===AUTH.trim()){
-authOK=true
+
 stage=2
+
 screen(`authorization verified
 
 awaiting node signature
 >`)
+
 }else{
+
 screen(`authorization failed
 
 tap anywhere to retry
 >`)
+
 stage=0
+
 }
 
 }
@@ -140,23 +145,29 @@ stage=0
 else if(stage===2){
 
 if(file.name==="node_sig.txt" && text===SIG.trim()){
-sigOK=true
 
 screen(`verifying node...
 
 access granted
 entering network...`)
 
+/* THIS IS THE IMPORTANT PART */
+
+localStorage.setItem("spirenet_usb_verified","true")
+
 setTimeout(()=>{
 window.location.href="app.html"
 },1500)
 
 }else{
+
 screen(`signature invalid
 
 tap anywhere to retry
 >`)
+
 stage=0
+
 }
 
 }
