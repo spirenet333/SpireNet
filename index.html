@@ -4,195 +4,169 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>spirenet</title>
+
 <style>
+
 html,body{
-  margin:0;
-  height:100%;
-  background:#000;
-  color:#fff;
-  font-family:menlo,monospace;
-  display:flex;
-  align-items:center;
-  justify-content:center;
-  overflow:hidden;
+margin:0;
+height:100%;
+background:black;
+color:white;
+font-family:Menlo, monospace;
+display:flex;
+align-items:center;
+justify-content:center;
+overflow:hidden;
 }
+
 #terminal{
-  white-space:pre-wrap;
-  font-size:16px;
-  line-height:1.6;
-  text-align:left;
+white-space:pre-wrap;
+font-size:16px;
+line-height:1.6;
 }
+
 .cursor{
-  display:inline-block;
-  width:10px;
-  background:#fff;
-  vertical-align:middle;
+display:inline-block;
+width:10px;
+background:white;
+animation:blink 1s infinite;
 }
+
+@keyframes blink{
+0%{opacity:0}
+50%{opacity:1}
+100%{opacity:0}
+}
+
 .hidden{
-  display:none;
+display:none;
 }
+
 </style>
 </head>
+
 <body>
 
-<div id="terminal">spirenet node awaiting key...
+<div id="terminal">
+spirenet node awaiting key...
 
-tap anywhere to continue
-> <span class="cursor"></span></div>
+tap anywhere to begin
+>
+<span class="cursor"></span>
+</div>
 
-<input id="keyfile" class="hidden" type="file">
-<input id="authfile" class="hidden" type="file">
-<input id="sigfile" class="hidden" type="file">
+<input id="fileInput" class="hidden" type="file">
 
 <script>
-const terminal = document.getElementById("terminal");
-const keyfile = document.getElementById("keyfile");
-const authfile = document.getElementById("authfile");
-const sigfile = document.getElementById("sigfile");
 
-let stage = "key";
+const terminal = document.getElementById("terminal")
+const fileInput = document.getElementById("fileInput")
 
-const EXPECTED_KEY_NAME = "node.key";
-const EXPECTED_AUTH_NAME = "node.auth";
-const EXPECTED_SIG_NAME = "node.sig";
+let stage = 0
 
-const EXPECTED_KEY =
+const KEY =
 `7A91C3B7F4E21D9A0A62D3E8F3C2A4419C8F72E0B6F11A3A0D5E98B82A9F1E7C
 92F4E10BC3A7D8E9F1A2C33B7E91D6A5B0E8A1F72C9D33B7A81F02D5E7C6A1B4
 1F8C2B90E4D1A7B3F6C9D82A0B11E7A92F3C7D1A4E8B0C6F3D1A8B7E29F4A6C2
 C8E9D0A1B4F7C2D6A81E39F02D5B7A9C4E1F6A3B8D2E0F9A1C7B3E4D2F6A8B0C
-A91F2B7E0C3D8F4A6E1B9D3C7A5F2E8D0C1B7A6E3F9D4B8A1C6E2F7A3D9B0C4E`;
+A91F2B7E0C3D8F4A6E1B9D3C7A5F2E8D0C1B7A6E3F9D4B8A1C6E2F7A3D9B0C4E`
 
-const EXPECTED_AUTH =
+const AUTH =
 `SPIRENET_NODE_VERIFICATION
-AUTHORIZED_DEVICE`;
+AUTHORIZED_DEVICE`
 
-const EXPECTED_SIG = `SPN-AUTH-9921-FE81-AC77-991E`;
+const SIG =
+`SPN-AUTH-9921-FE81-AC77-991E`
+
+let keyOK=false
+let authOK=false
+let sigOK=false
 
 function screen(text){
-  terminal.innerHTML = text.replace(/\n/g,"<br>");
+terminal.innerHTML=text+"<br><span class='cursor'></span>"
 }
 
-function resetFlow(message){
-  sessionStorage.removeItem("spirenet_usb_verified");
-  stage = "key";
-  screen(message + "\n\ntap anywhere to retry\n> <span class='cursor'></span>");
-  keyfile.value = "";
-  authfile.value = "";
-  sigfile.value = "";
+document.addEventListener("click",()=>{
+fileInput.click()
+})
+
+fileInput.addEventListener("change",()=>{
+
+const file=fileInput.files[0]
+const reader=new FileReader()
+
+reader.onload=function(){
+
+const text=reader.result.trim()
+
+if(stage===0){
+
+if(file.name==="node_key.txt" && text===KEY.trim()){
+keyOK=true
+stage=1
+screen(`node key detected
+
+awaiting authorization file
+>`)
+}else{
+screen(`invalid node key
+
+tap anywhere to retry
+>`)
+stage=0
 }
 
-function success(){
-  sessionStorage.setItem("spirenet_usb_verified","true");
-  screen(
-`device detected
+}
 
-reading node key...
-verifying authorization...
-verifying node signature...
+else if(stage===1){
+
+if(file.name==="node_auth.txt" && text===AUTH.trim()){
+authOK=true
+stage=2
+screen(`authorization verified
+
+awaiting node signature
+>`)
+}else{
+screen(`authorization failed
+
+tap anywhere to retry
+>`)
+stage=0
+}
+
+}
+
+else if(stage===2){
+
+if(file.name==="node_sig.txt" && text===SIG.trim()){
+sigOK=true
+
+screen(`verifying node...
 
 access granted
-entering network...
-> <span class='cursor'></span>`);
-  setTimeout(() => {
-    window.location.href = "app.html";
-  }, 1200);
+entering network...`)
+
+setTimeout(()=>{
+window.location.href="app.html"
+},1500)
+
+}else{
+screen(`signature invalid
+
+tap anywhere to retry
+>`)
+stage=0
 }
 
-function normalizeText(text){
-  return text.replace(/\r\n/g,"\n").trim();
 }
 
-document.addEventListener("click", () => {
-  if(stage === "key") keyfile.click();
-  else if(stage === "auth") authfile.click();
-  else if(stage === "sig") sigfile.click();
-});
-
-document.addEventListener("keydown", (e) => {
-  if(e.key === "Enter"){
-    if(stage === "key") keyfile.click();
-    else if(stage === "auth") authfile.click();
-    else if(stage === "sig") sigfile.click();
-  }
-});
-
-keyfile.addEventListener("change", () => {
-  const file = keyfile.files[0];
-  if(!file){
-    resetFlow("no key file selected");
-    return;
-  }
-  if(file.name.toLowerCase() !== EXPECTED_KEY_NAME){
-    resetFlow("wrong file selected\nexpected node.key");
-    return;
-  }
-  stage = "auth";
-  screen("node key detected\n\nawaiting authorization file...\n> <span class='cursor'></span>");
-  setTimeout(() => authfile.click(), 150);
-});
-
-authfile.addEventListener("change", () => {
-  const file = authfile.files[0];
-  if(!file){
-    resetFlow("no authorization file selected");
-    return;
-  }
-  if(file.name.toLowerCase() !== EXPECTED_AUTH_NAME){
-    resetFlow("wrong file selected\nexpected node.auth");
-    return;
-  }
-  stage = "sig";
-  screen("authorization detected\n\nawaiting signature file...\n> <span class='cursor'></span>");
-  setTimeout(() => sigfile.click(), 150);
-});
-
-sigfile.addEventListener("change", verifyAll);
-
-function verifyAll(){
-  const key = keyfile.files[0];
-  const auth = authfile.files[0];
-  const sig = sigfile.files[0];
-
-  if(!key || !auth || !sig){
-    resetFlow("missing required files");
-    return;
-  }
-
-  const keyReader = new FileReader();
-  const authReader = new FileReader();
-  const sigReader = new FileReader();
-
-  keyReader.onload = function(){
-    authReader.onload = function(){
-      sigReader.onload = function(){
-        const keyText = normalizeText(keyReader.result);
-        const authText = normalizeText(authReader.result);
-        const sigText = normalizeText(sigReader.result);
-
-        if(keyText !== normalizeText(EXPECTED_KEY)){
-          resetFlow("node key mismatch");
-          return;
-        }
-
-        if(authText !== normalizeText(EXPECTED_AUTH)){
-          resetFlow("authorization mismatch");
-          return;
-        }
-
-        if(sigText !== normalizeText(EXPECTED_SIG)){
-          resetFlow("signature mismatch");
-          return;
-        }
-
-        success();
-      };
-      sigReader.readAsText(sig);
-    };
-    authReader.readAsText(auth);
-  };
-  keyReader.readAsText(key);
 }
+
+reader.readAsText(file)
+
+})
+
 </script>
 
 </body>
