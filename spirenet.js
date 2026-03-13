@@ -3,7 +3,7 @@ if (localStorage.getItem("spirenet_usb_verified") !== "true") {
 }
 
 const APP_NAME = "spirenet";
-const DB_NAME = "spirenet_cli_db_v5";
+const DB_NAME = "spirenet_cli_db_v6";
 const DB_VERSION = 1;
 
 const terminal = document.getElementById("terminal");
@@ -97,6 +97,7 @@ const state = {
 
   customers: [],
   jobs: [],
+  receipts: [],
 
   rootId: null,
   cwdId: null,
@@ -411,7 +412,8 @@ async function saveAll() {
     forms: state.forms,
     submissions: state.submissions,
     customers: state.customers,
-    jobs: state.jobs
+    jobs: state.jobs,
+    receipts: state.receipts
   });
 }
 
@@ -429,6 +431,7 @@ async function loadAll() {
     state.submissions = saved.submissions || [];
     state.customers = saved.customers || [];
     state.jobs = saved.jobs || [];
+    state.receipts = saved.receipts || [];
     state.cwdPath = pathOf(state.cwdId || state.rootId) || "/spirenet";
     state.adminUnlocked = localStorage.getItem("spirenet_role") === "admin";
     syncAdminFiles();
@@ -518,6 +521,7 @@ async function loadAll() {
   state.submissions = [];
   state.customers = [];
   state.jobs = [];
+  state.receipts = [];
   state.adminUnlocked = localStorage.getItem("spirenet_role") === "admin";
 
   syncAdminFiles();
@@ -557,6 +561,10 @@ const COMMANDS = [
   ["jobs", "list jobs"],
   ["viewjob <id>", "view job record"],
   ["setjob <id> <field> <value>", "edit job field"],
+  ["newreceipt", "create new receipt"],
+  ["receipts", "list receipts"],
+  ["viewreceipt <id>", "view receipt record"],
+  ["setreceipt <id> <field> <value>", "edit receipt field"],
   ["entry directory", "start form wizard for current directory"],
   ["complete form", "complete form draft"],
   ["cancelform", "discard draft form"],
@@ -1339,6 +1347,107 @@ pre{white-space:pre-wrap;word-wrap:break-word;overflow-wrap:anywhere;font-family
     j[field] = value;
     await saveAll();
     addLine("job updated");
+    return;
+  }
+
+  if (cmd === "newreceipt") {
+    const id = crypto.randomUUID().slice(0, 8);
+
+    const receipt = {
+      id,
+      vendor: "",
+      amount: "",
+      date: "",
+      job: "",
+      category: "",
+      notes: "",
+      createdAt: nowIso()
+    };
+
+    state.receipts.push(receipt);
+    await saveAll();
+
+    addLine("receipt created");
+    addLine("receipt id: " + id);
+    addLine("edit fields using:");
+    addLine("setreceipt " + id + " vendor <vendor>");
+    addLine("setreceipt " + id + " amount <amount>");
+    addLine("setreceipt " + id + " date <date>");
+    addLine("setreceipt " + id + " job <job id>");
+    addLine("setreceipt " + id + " category <category>");
+    addLine("setreceipt " + id + " notes <notes>");
+    return;
+  }
+
+  if (cmd === "receipts") {
+    if (state.receipts.length === 0) {
+      addLine("no receipts");
+      return;
+    }
+
+    state.receipts.forEach(r => {
+      addLine(
+        r.id +
+        " " +
+        (r.vendor || "(no vendor)") +
+        " $" +
+        (r.amount || "0") +
+        " " +
+        (r.job ? "[job " + r.job + "]" : "")
+      );
+    });
+
+    return;
+  }
+
+  if (cmd === "viewreceipt") {
+    if (args.length < 1) {
+      addLine("usage: viewreceipt <id>");
+      return;
+    }
+
+    const r = state.receipts.find(x => x.id === args[0]);
+
+    if (!r) {
+      addLine("receipt not found");
+      return;
+    }
+
+    addLine("receipt " + r.id);
+    addLine("vendor: " + r.vendor);
+    addLine("amount: " + r.amount);
+    addLine("date: " + r.date);
+    addLine("job: " + r.job);
+    addLine("category: " + r.category);
+    addLine("notes: " + r.notes);
+    return;
+  }
+
+  if (cmd === "setreceipt") {
+    if (args.length < 3) {
+      addLine("usage: setreceipt <id> <field> <value>");
+      return;
+    }
+
+    const id = args[0];
+    const field = args[1];
+    const value = args.slice(2).join(" ");
+
+    const r = state.receipts.find(x => x.id === id);
+
+    if (!r) {
+      addLine("receipt not found");
+      return;
+    }
+
+    if (!["vendor", "amount", "date", "job", "category", "notes"].includes(field)) {
+      addLine("invalid field");
+      return;
+    }
+
+    r[field] = value;
+    await saveAll();
+    addLine("receipt updated");
     return;
   }
 
