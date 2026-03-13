@@ -3,7 +3,7 @@ if (localStorage.getItem("spirenet_usb_verified") !== "true") {
 }
 
 const APP_NAME = "spirenet";
-const DB_NAME = "spirenet_cli_db_v6";
+const DB_NAME = "spirenet_cli_db_v7";
 const DB_VERSION = 1;
 
 const terminal = document.getElementById("terminal");
@@ -91,7 +91,6 @@ async function kvSet(key, val) {
 const state = {
   transcript: [],
   current: "",
-
   currentUser: "operator",
   adminUnlocked: localStorage.getItem("spirenet_role") === "admin",
 
@@ -227,181 +226,10 @@ function pathOf(id) {
   return "/spirenet/" + parts.reverse().join("/");
 }
 
-function normalizePath(raw) {
-  raw = lc(raw).replaceAll("\\", "/");
-  while (raw.includes("//")) raw = raw.replaceAll("//", "/");
-  if (raw.length > 1 && raw.endsWith("/")) raw = raw.slice(0, -1);
-  return raw;
-}
-
-function resolvePath(fromDirId, raw) {
-  raw = normalizePath(raw);
-
-  if (raw === "" || raw === ".") return { ok: true, id: fromDirId };
-  if (raw === "/" || raw === "/spirenet") return { ok: true, id: state.rootId };
-
-  let working = raw;
-  let startId = fromDirId;
-
-  if (working.startsWith("/spirenet")) {
-    startId = state.rootId;
-    working = working.slice("/spirenet".length);
-    if (working === "") return { ok: true, id: state.rootId };
-  } else if (working.startsWith("/")) {
-    startId = state.rootId;
-    working = working.slice(1);
-  }
-
-  const parts = working.split("/").filter(Boolean);
-  let curId = startId;
-
-  for (const part of parts) {
-    if (part === ".") continue;
-
-    if (part === "..") {
-      const cur = nodeById(curId);
-      if (cur && cur.parentId) curId = cur.parentId;
-      continue;
-    }
-
-    const child = childByName(curId, part);
-    if (!child) return { ok: false, err: `not found: ${raw}` };
-    curId = child.id;
-  }
-
-  return { ok: true, id: curId };
-}
-
-/* =========================
-   forms
-========================= */
-function formForDirCompleted(dirId) {
-  return state.forms.find(f => f.dirId === dirId && f.status === "completed") || null;
-}
-
-function formForDirDraft(dirId) {
-  return state.forms.find(f => f.dirId === dirId && f.status === "draft") || null;
-}
-
-function versionForForm(name, questions) {
-  const s = name + "::" + questions.join("||");
-  let h = 0;
-  for (let i = 0; i < s.length; i++) {
-    h = (h * 31 + s.charCodeAt(i)) >>> 0;
-  }
-  return "v" + h.toString(16);
-}
-
-function emitFormInfoIfAny(dirId) {
-  const f = formForDirCompleted(dirId);
-
-  if (!f) {
-    state.currentFormInfo = null;
-    state.currentAnswers = {};
-    return;
-  }
-
-  state.currentFormInfo = {
-    name: f.name,
-    questions: f.questions,
-    version: f.version
-  };
-
-  state.currentAnswers = {};
-  addLine(`form detected: ${f.name}`);
-  f.questions.forEach((q, i) => addLine(`q${i + 1}: ${q}`));
-  addLine("fill: answer <q#> <text>");
-  addLine("then: submit");
-  addLine("other: clearanswers, submissions, view <id>");
-}
-
-/* =========================
-   tables
-========================= */
-function renderTables(text) {
-  const lines = (text ?? "").split("\n");
-  const out = [];
-  let inTbl = false;
-  let tbl = [];
-
-  function flushTbl() {
-    if (tbl.length === 0) return;
-
-    const rows = tbl.map(l => l.split("|").map(c => c.trim()));
-    const cols = Math.max(...rows.map(r => r.length), 0);
-    const widths = new Array(cols).fill(0);
-
-    rows.forEach(r => {
-      for (let i = 0; i < cols; i++) {
-        const v = r[i] ?? "";
-        widths[i] = Math.max(widths[i], v.length);
-      }
-    });
-
-    rows.forEach(r => {
-      const line = r.map((v, i) => (v ?? "").padEnd(widths[i], " ")).join(" | ");
-      out.push(line);
-    });
-
-    tbl = [];
-  }
-
-  for (const l of lines) {
-    const s = lc(l).trim();
-
-    if (s.includes("{writetbl}")) {
-      inTbl = true;
-      out.push("");
-      out.push("");
-      continue;
-    }
-
-    if (s.includes("{endtbl}")) {
-      inTbl = false;
-      flushTbl();
-      continue;
-    }
-
-    if (inTbl) tbl.push(lc(l));
-    else out.push(lc(l));
-  }
-
-  if (inTbl) flushTbl();
-  return out.join("\n");
-}
-
 /* =========================
    persistence
 ========================= */
-function syncAdminFiles() {
-  const adminDir = state.nodes.find(
-    n => n.parentId === state.rootId && n.name === "admin" && n.type === "dir"
-  );
-
-  if (!adminDir) return;
-
-  let roleFile = state.nodes.find(
-    n => n.parentId === adminDir.id && n.name === "admin_role" && n.type === "file"
-  );
-
-  if (!roleFile) {
-    roleFile = {
-      id: crypto.randomUUID(),
-      parentId: adminDir.id,
-      name: "admin_role",
-      type: "file",
-      content: "",
-      createdAt: nowIso()
-    };
-    state.nodes.push(roleFile);
-  }
-
-  roleFile.content = localStorage.getItem("spirenet_role") || "operator";
-}
-
 async function saveAll() {
-  syncAdminFiles();
-
   await kvSet("spirenet_state", {
     currentUser: state.currentUser,
     rootId: state.rootId,
@@ -434,7 +262,6 @@ async function loadAll() {
     state.receipts = saved.receipts || [];
     state.cwdPath = pathOf(state.cwdId || state.rootId) || "/spirenet";
     state.adminUnlocked = localStorage.getItem("spirenet_role") === "admin";
-    syncAdminFiles();
     return;
   }
 
@@ -456,15 +283,6 @@ async function loadAll() {
     createdAt: nowIso()
   };
 
-  const net = {
-    id: crypto.randomUUID(),
-    parentId: root.id,
-    name: "net",
-    type: "dir",
-    content: null,
-    createdAt: nowIso()
-  };
-
   const job = {
     id: crypto.randomUUID(),
     parentId: root.id,
@@ -474,237 +292,55 @@ async function loadAll() {
     createdAt: nowIso()
   };
 
-  const adminRole = {
-    id: crypto.randomUUID(),
-    parentId: admin.id,
-    name: "admin_role",
-    type: "file",
-    content: localStorage.getItem("spirenet_role") || "operator",
-    createdAt: nowIso()
-  };
-
-  state.nodes = [root, admin, net, job, adminRole];
-
-  const letters = "abcdefghijklmnopqrstuvwxyz".split("");
-
-  for (const letter1 of letters) {
-    const level1 = {
-      id: crypto.randomUUID(),
-      parentId: net.id,
-      name: letter1,
-      type: "dir",
-      content: null,
-      createdAt: nowIso()
-    };
-
-    state.nodes.push(level1);
-
-    for (const letter2 of letters) {
-      const level2 = {
-        id: crypto.randomUUID(),
-        parentId: level1.id,
-        name: letter2,
-        type: "dir",
-        content: null,
-        createdAt: nowIso()
-      };
-      state.nodes.push(level2);
-    }
-  }
+  state.nodes = [root, admin, job];
 
   state.rootId = root.id;
   state.cwdId = root.id;
   state.cwdPath = "/spirenet";
   state.activeFileId = null;
   state.activeFileName = null;
-  state.forms = [];
-  state.submissions = [];
-  state.customers = [];
-  state.jobs = [];
-  state.receipts = [];
-  state.adminUnlocked = localStorage.getItem("spirenet_role") === "admin";
 
-  syncAdminFiles();
   await saveAll();
 }
 
 /* =========================
-   commands
+   command list
 ========================= */
 const COMMANDS = [
   ["help", "list commands"],
-  ["commandls", "list all commands"],
-  ["cmmdhelp", "describe commands + usage"],
-  ["status", "show node status"],
+  ["clear", "clear terminal"],
   ["pwd", "show current directory"],
-  ["whoami", "show current user"],
-  ["ls", "list directories/files in cwd"],
-  ["cd <path>", "change directory (/, .., relative, absolute)"],
-  ["mkdir <name>", "create directory in cwd"],
-  ["touch <filename>", "create empty file in cwd"],
-  ["rm <name>", "delete file or empty dir"],
-  ["mv <source> <dest>", "move/rename file or dir"],
-  ["cat <filename>", "show file contents"],
-  ["write <filename> <text...>", "overwrite file with text"],
-  ["append <filename> <text...>", "append newline + text"],
-  ["open <filename>", "set active file for printpg"],
-  ["edit <filename>", "enter edit mode"],
-  ["done", "exit edit mode + save"],
-  ["cancel", "exit edit mode without saving"],
-  ["preview <filename>", "show rendered table view"],
-  ["printpg", "print user/cwd/file/file view"],
-  ["newcustomer", "create a customer record"],
-  ["customers", "list all customers"],
-  ["viewcustomer <id>", "view customer record"],
-  ["setcustomer <id> <field> <value>", "edit customer field"],
-  ["newjob", "create new job"],
+  ["ls", "list files"],
+  ["cd <path>", "change directory"],
+  ["touch <file>", "create file"],
+  ["cat <file>", "show file"],
+  ["write <file> <text>", "write file"],
+  ["append <file> <text>", "append file"],
+  ["newcustomer", "create customer"],
+  ["customers", "list customers"],
+  ["viewcustomer <id>", "view customer"],
+  ["setcustomer <id> <field> <value>", "edit customer"],
+  ["newjob", "create job"],
   ["jobs", "list jobs"],
-  ["viewjob <id>", "view job record"],
-  ["setjob <id> <field> <value>", "edit job field"],
-  ["newreceipt", "create new receipt"],
+  ["viewjob <id>", "view job"],
+  ["setjob <id> <field> <value>", "edit job"],
+  ["newreceipt", "create receipt"],
   ["receipts", "list receipts"],
-  ["viewreceipt <id>", "view receipt record"],
-  ["setreceipt <id> <field> <value>", "edit receipt field"],
-  ["entry directory", "start form wizard for current directory"],
-  ["complete form", "complete form draft"],
-  ["cancelform", "discard draft form"],
-  ["answer <q#> <text...>", "answer form question"],
-  ["clearanswers", "clear form answers"],
-  ["submit", "save completed form submission"],
-  ["submissions", "list saved submissions"],
-  ["view <id>", "view saved submission"],
-  ["adminauth", "unlock admin barrier using usb role"],
-  ["logout", "return to login gate"],
-  ["clear", "clear terminal display"]
+  ["viewreceipt <id>", "view receipt"],
+  ["setreceipt <id> <field> <value>", "edit receipt"],
+  ["jobreceipts <jobid>", "list receipts for job"],
+  ["jobtotal <jobid>", "total receipts for job"]
 ];
-
-/* =========================
-   edit mode
-========================= */
-function handleEditLine(line) {
-  const t = lc(line).trim();
-
-  if (t === "done") {
-    const file = nodeById(state.edit.fileId);
-
-    if (file && file.type === "file") {
-      file.content = state.edit.bufferLines.join("\n");
-      saveAll();
-      addLine("saved");
-    } else {
-      addLine("error: file missing");
-    }
-
-    state.edit = null;
-    return;
-  }
-
-  if (t === "cancel") {
-    state.edit = null;
-    addLine("canceled");
-    return;
-  }
-
-  if (t.includes("{writetbl}")) {
-    state.edit.bufferLines.push("{writetbl}");
-    state.edit.inTable = true;
-    addLine("(table mode: type rows like: name | age | id. then {endtbl})");
-    return;
-  }
-
-  if (t.includes("{endtbl}")) {
-    state.edit.bufferLines.push("{endtbl}");
-    state.edit.inTable = false;
-    addLine("(table ended)");
-    return;
-  }
-
-  state.edit.bufferLines.push(line);
-}
-
-/* =========================
-   wizard
-========================= */
-function handleWizardLine(line) {
-  const t = lc(line).trim();
-
-  if (state.wizard.mode === "formname") {
-    if (!t) {
-      addLine("form name?");
-      return;
-    }
-
-    state.wizard.name = t;
-    state.wizard.mode = "questions";
-    addLine("add question (or type done)?");
-    return;
-  }
-
-  if (state.wizard.mode === "questions") {
-    if (t === "done") {
-      if (state.wizard.questions.length === 0) {
-        addLine("error: add at least one question");
-        addLine("add question (or type done)?");
-        return;
-      }
-
-      state.forms.push({
-        dirId: state.wizard.dirId,
-        status: "draft",
-        name: state.wizard.name,
-        questions: state.wizard.questions.slice(),
-        version: "",
-        createdAt: nowIso()
-      });
-
-      state.wizard = null;
-      saveAll();
-      addLine("draft saved. run: complete form");
-      return;
-    }
-
-    if (!t) {
-      addLine("add question (or type done)?");
-      return;
-    }
-
-    state.wizard.questions.push(t);
-    addLine("add question (or type done)?");
-  }
-}
-
 /* =========================
    core command handler
 ========================= */
 async function handleLine(line) {
-  if (state.edit) {
-    handleEditLine(line);
-    return;
-  }
-
-  if (state.wizard) {
-    handleWizardLine(line);
-    return;
-  }
 
   const { cmd, args } = splitCmd(line);
 
-  if (cmd === "help" || cmd === "commandls") {
+  if (cmd === "help") {
     addLine("commands:");
     COMMANDS.forEach(c => addLine(c[0]));
-    return;
-  }
-
-  if (cmd === "cmmdhelp") {
-    addLine("command descriptions:");
-    COMMANDS.forEach(([k, d]) => addLine(`${k} : ${d}`));
-    return;
-  }
-
-  if (cmd === "status") {
-    addLine("node authenticated");
-    addLine(`role: ${localStorage.getItem("spirenet_role") || "operator"}`);
-    addLine(`cwd: ${state.cwdPath}`);
     return;
   }
 
@@ -714,127 +350,76 @@ async function handleLine(line) {
     return;
   }
 
-  if (cmd === "logout") {
-    localStorage.removeItem("spirenet_usb_verified");
-    localStorage.removeItem("spirenet_role");
-    window.location.href = "index.html";
-    return;
-  }
-
-  if (cmd === "adminauth") {
-    if (localStorage.getItem("spirenet_role") === "admin") {
-      state.adminUnlocked = true;
-      await saveAll();
-      addLine("admin barrier unlocked");
-    } else {
-      addLine("admin authorization required");
-    }
-    return;
-  }
-
-  if (cmd === "whoami") {
-    addLine(state.currentUser || "");
-    return;
-  }
-
   if (cmd === "pwd") {
     addLine(state.cwdPath);
     return;
   }
 
   if (cmd === "ls") {
-    const kids = visibleChildrenOf(state.cwdId);
-    const dirs = kids.filter(n => n.type === "dir");
-    const files = kids.filter(n => n.type === "file");
 
-    if (dirs.length === 0 && files.length === 0) {
+    const kids = childrenOf(state.cwdId);
+
+    if (kids.length === 0) {
       addLine("(empty)");
       return;
     }
 
-    dirs.forEach(d => addLine("dir " + d.name));
-    files.forEach(f => addLine("file " + f.name));
+    kids.forEach(n => {
+      if (n.type === "dir") addLine("dir " + n.name);
+      if (n.type === "file") addLine("file " + n.name);
+    });
+
     return;
   }
 
   if (cmd === "cd") {
+
     if (args.length < 1) {
       addLine("error: missing path");
       return;
     }
 
-    const target = resolvePath(state.cwdId, args[0]);
-    if (!target.ok) {
-      addLine("error: " + target.err);
-      return;
-    }
-
-    const n = nodeById(target.id);
-    if (!n || n.type !== "dir") {
-      addLine("error: not a directory");
-      return;
-    }
-
-    if (pathOf(n.id) === "/spirenet/admin" && !state.adminUnlocked) {
-      addLine("error: admin barrier locked");
-      return;
-    }
-
-    state.cwdId = n.id;
-    state.cwdPath = pathOf(n.id);
-    await saveAll();
-    addLine(state.cwdPath);
-    emitFormInfoIfAny(state.cwdId);
-    return;
-  }
-
-  if (cmd === "mkdir") {
-    if (args.length < 1) {
-      addLine("error: missing name");
-      return;
-    }
-
     const name = args[0];
-    if (!safeName(name)) {
-      addLine("error: invalid name (use letters, numbers, dash, underscore)");
+
+    if (name === "/") {
+      state.cwdId = state.rootId;
+      state.cwdPath = "/spirenet";
       return;
     }
 
-    if (childByName(state.cwdId, name)) {
-      addLine("error: already exists");
+    if (name === "..") {
+
+      const node = nodeById(state.cwdId);
+
+      if (node.parentId) {
+        state.cwdId = node.parentId;
+        state.cwdPath = pathOf(node.parentId);
+      }
+
       return;
     }
 
-    state.nodes.push({
-      id: crypto.randomUUID(),
-      parentId: state.cwdId,
-      name,
-      type: "dir",
-      content: null,
-      createdAt: nowIso()
-    });
+    const child = childByName(state.cwdId, name);
 
-    await saveAll();
-    addLine("ok");
+    if (!child || child.type !== "dir") {
+      addLine("not found");
+      return;
+    }
+
+    state.cwdId = child.id;
+    state.cwdPath = pathOf(child.id);
+
     return;
   }
 
   if (cmd === "touch") {
+
     if (args.length < 1) {
-      addLine("error: missing filename");
+      addLine("missing filename");
       return;
     }
 
     const name = args[0];
-    if (!safeName(name)) {
-      addLine("error: invalid filename (use letters, numbers, dash, underscore)");
-      return;
-    }
-
-    if (childByName(state.cwdId, name)) {
-      addLine("error: already exists");
-      return;
-    }
 
     state.nodes.push({
       id: crypto.randomUUID(),
@@ -846,352 +431,109 @@ async function handleLine(line) {
     });
 
     await saveAll();
-    addLine("ok");
-    return;
-  }
-
-  if (cmd === "rm") {
-    if (args.length < 1) {
-      addLine("error: missing name");
-      return;
-    }
-
-    const n = childByName(state.cwdId, args[0]);
-    if (!n) {
-      addLine("not found");
-      return;
-    }
-
-    if (n.type === "dir") {
-      const kids = childrenOf(n.id);
-      if (kids.length > 0) {
-        addLine("error: directory not empty");
-        return;
-      }
-    }
-
-    if (state.activeFileId === n.id) {
-      state.activeFileId = null;
-      state.activeFileName = null;
-    }
-
-    state.nodes = state.nodes.filter(x => x.id !== n.id);
-
-    if (n.type === "dir") {
-      state.forms = state.forms.filter(f => f.dirId !== n.id);
-      state.submissions = state.submissions.filter(s => s.dirId !== n.id);
-    }
-
-    await saveAll();
-    addLine("ok");
-    return;
-  }
-
-  if (cmd === "mv") {
-    if (args.length < 2) {
-      addLine("error: mv <source> <dest>");
-      return;
-    }
-
-    const srcRes = resolvePath(state.cwdId, args[0]);
-    if (!srcRes.ok) {
-      addLine("error: " + srcRes.err);
-      return;
-    }
-
-    const srcNode = nodeById(srcRes.id);
-    if (!srcNode || srcNode.id === state.rootId) {
-      addLine("error: invalid source");
-      return;
-    }
-
-    const dstRes = resolvePath(state.cwdId, args[1]);
-
-    if (dstRes.ok) {
-      const dstNode = nodeById(dstRes.id);
-
-      if (dstNode && dstNode.type === "dir") {
-        if (pathOf(dstNode.id) === "/spirenet/admin" && !state.adminUnlocked) {
-          addLine("error: admin barrier locked");
-          return;
-        }
-
-        if (childByName(dstNode.id, srcNode.name)) {
-          addLine("error: name conflict");
-          return;
-        }
-
-        srcNode.parentId = dstNode.id;
-        await saveAll();
-        addLine("ok");
-        return;
-      }
-    }
-
-    const dp = normalizePath(args[1]);
-    const parts = dp.replace(/^\/spirenet/, "").replace(/^\//, "").split("/").filter(Boolean);
-
-    if (parts.length === 0) {
-      addLine("error: invalid dest");
-      return;
-    }
-
-    const newName = parts[parts.length - 1];
-    if (!safeName(newName)) {
-      addLine("error: invalid name");
-      return;
-    }
-
-    const parentPathRaw = parts.slice(0, -1).join("/");
-    const parentRes = parentPathRaw ? resolvePath(state.cwdId, parentPathRaw) : { ok: true, id: state.cwdId };
-
-    if (!parentRes.ok) {
-      addLine("error: invalid dest path");
-      return;
-    }
-
-    const parentNode = nodeById(parentRes.id);
-    if (!parentNode || parentNode.type !== "dir") {
-      addLine("error: invalid dest directory");
-      return;
-    }
-
-    if (pathOf(parentNode.id) === "/spirenet/admin" && !state.adminUnlocked) {
-      addLine("error: admin barrier locked");
-      return;
-    }
-
-    if (childByName(parentNode.id, newName)) {
-      addLine("error: name conflict");
-      return;
-    }
-
-    srcNode.parentId = parentNode.id;
-    srcNode.name = newName;
-    await saveAll();
-    addLine("ok");
+    addLine("file created");
     return;
   }
 
   if (cmd === "cat") {
+
     if (args.length < 1) {
-      addLine("error: missing filename");
+      addLine("missing filename");
       return;
     }
 
-    const n = childByName(state.cwdId, args[0]);
-    if (!n || n.type !== "file") {
-      addLine("not found");
+    const f = childByName(state.cwdId, args[0]);
+
+    if (!f || f.type !== "file") {
+      addLine("file not found");
       return;
     }
 
-    addLine(n.content || "");
+    addLine(f.content || "");
     return;
   }
 
   if (cmd === "write") {
+
     if (args.length < 2) {
-      addLine("error: write <filename> <text...>");
+      addLine("usage: write <file> <text>");
       return;
     }
 
-    const n = childByName(state.cwdId, args[0]);
-    if (!n || n.type !== "file") {
-      addLine("not found");
+    const f = childByName(state.cwdId, args[0]);
+
+    if (!f || f.type !== "file") {
+      addLine("file not found");
       return;
     }
 
-    n.content = joinRest(args.slice(1));
+    f.content = args.slice(1).join(" ");
+
     await saveAll();
-    addLine("ok");
+    addLine("written");
     return;
   }
 
   if (cmd === "append") {
+
     if (args.length < 2) {
-      addLine("error: append <filename> <text...>");
+      addLine("usage: append <file> <text>");
       return;
     }
 
-    const n = childByName(state.cwdId, args[0]);
-    if (!n || n.type !== "file") {
-      addLine("not found");
+    const f = childByName(state.cwdId, args[0]);
+
+    if (!f || f.type !== "file") {
+      addLine("file not found");
       return;
     }
 
-    const t = joinRest(args.slice(1));
-    n.content = (n.content || "") ? (n.content + "\n" + t) : t;
+    const text = args.slice(1).join(" ");
+
+    if (!f.content) f.content = text;
+    else f.content += "\n" + text;
+
     await saveAll();
-    addLine("ok");
+    addLine("appended");
     return;
   }
 
-  if (cmd === "open") {
-    if (args.length < 1) {
-      addLine("error: open <filename>");
-      return;
-    }
-
-    const n = childByName(state.cwdId, args[0]);
-    if (!n || n.type !== "file") {
-      addLine("not found");
-      return;
-    }
-
-    state.activeFileId = n.id;
-    state.activeFileName = n.name;
-    await saveAll();
-    addLine("active file set");
-    return;
-  }
-
-  if (cmd === "edit") {
-    if (args.length < 1) {
-      addLine("error: edit <filename>");
-      return;
-    }
-
-    const name = args[0];
-    let n = childByName(state.cwdId, name);
-
-    if (!n) {
-      if (!safeName(name)) {
-        addLine("error: invalid filename");
-        return;
-      }
-
-      n = {
-        id: crypto.randomUUID(),
-        parentId: state.cwdId,
-        name,
-        type: "file",
-        content: "",
-        createdAt: nowIso()
-      };
-
-      state.nodes.push(n);
-      await saveAll();
-      addLine("created file");
-    }
-
-    if (n.type !== "file") {
-      addLine("error: not a file");
-      return;
-    }
-
-    state.edit = {
-      fileId: n.id,
-      bufferLines: (n.content || "").split("\n"),
-      inTable: false
-    };
-
-    state.activeFileId = n.id;
-    state.activeFileName = n.name;
-    await saveAll();
-
-    addLine(`editing ${n.name}`);
-    addLine("type lines. use {writetbl} ... {endtbl} to insert a table.");
-    addLine("type done to save, cancel to discard.");
-    return;
-  }
-
-  if (cmd === "done" || cmd === "cancel") {
-    addLine("error: not in edit mode");
-    return;
-  }
-
-  if (cmd === "preview") {
-    if (args.length < 1) {
-      addLine("error: preview <filename>");
-      return;
-    }
-
-    const n = childByName(state.cwdId, args[0]);
-    if (!n || n.type !== "file") {
-      addLine("not found");
-      return;
-    }
-
-    addLine("preview:");
-    addLine(renderTables(n.content || ""));
-    return;
-  }
-
-  if (cmd === "printpg") {
-    const cwd = state.cwdPath;
-    const fileName = state.activeFileName || "(none)";
-    let fileView = "";
-
-    if (state.activeFileId) {
-      const n = nodeById(state.activeFileId);
-      if (n && n.type === "file") fileView = renderTables(n.content || "");
-    }
-
-    const printText =
-`print page
-
-user: ${state.currentUser || ""}
-cwd: ${cwd}
-file: ${fileName}
-
-file view:
-${fileView}
-`;
-
-    const safe = escapeHtml(printText);
-    const html = `<!doctype html><html><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>print</title>
-<style>
-body{font-family:menlo,monospace;font-size:12px;margin:40px;color:#000;background:#fff;}
-pre{white-space:pre-wrap;word-wrap:break-word;overflow-wrap:anywhere;font-family:menlo,monospace;font-size:12px;}
-</style>
-</head><body>
-<pre>${safe}</pre>
-<script>setTimeout(()=>{window.print()},400)<\/script>
-</body></html>`;
-
-    const blob = new Blob([html], { type: "text/html" });
-    const url = URL.createObjectURL(blob);
-    window.open(url, "_blank");
-    addLine("print ready");
-    return;
-  }
+  /* =========================
+     customers
+  ========================= */
 
   if (cmd === "newcustomer") {
-    const id = crypto.randomUUID().slice(0, 8);
 
-    const customer = {
+    const id = crypto.randomUUID().slice(0,8);
+
+    const c = {
       id,
-      name: "",
-      phone: "",
-      email: "",
-      address: "",
-      notes: "",
-      createdAt: nowIso()
+      name:"",
+      phone:"",
+      email:"",
+      address:"",
+      notes:"",
+      createdAt:nowIso()
     };
 
-    state.customers.push(customer);
+    state.customers.push(c);
+
     await saveAll();
 
     addLine("customer created");
-    addLine("customer id: " + id);
-    addLine("edit fields using:");
-    addLine("setcustomer " + id + " name <name>");
-    addLine("setcustomer " + id + " phone <phone>");
-    addLine("setcustomer " + id + " email <email>");
-    addLine("setcustomer " + id + " address <address>");
-    addLine("setcustomer " + id + " notes <notes>");
+    addLine("id: " + id);
+
     return;
   }
 
   if (cmd === "customers") {
+
     if (state.customers.length === 0) {
       addLine("no customers");
       return;
     }
 
-    state.customers.forEach(c => {
+    state.customers.forEach(c=>{
       addLine(c.id + " " + (c.name || "(unnamed)"));
     });
 
@@ -1199,12 +541,8 @@ pre{white-space:pre-wrap;word-wrap:break-word;overflow-wrap:anywhere;font-family
   }
 
   if (cmd === "viewcustomer") {
-    if (args.length < 1) {
-      addLine("error: viewcustomer <id>");
-      return;
-    }
 
-    const c = state.customers.find(x => x.id === args[0]);
+    const c = state.customers.find(x=>x.id===args[0]);
 
     if (!c) {
       addLine("customer not found");
@@ -1212,403 +550,239 @@ pre{white-space:pre-wrap;word-wrap:break-word;overflow-wrap:anywhere;font-family
     }
 
     addLine("customer " + c.id);
-    addLine("name: " + (c.name || ""));
-    addLine("phone: " + (c.phone || ""));
-    addLine("email: " + (c.email || ""));
-    addLine("address: " + (c.address || ""));
-    addLine("notes: " + (c.notes || ""));
+    addLine("name: " + c.name);
+    addLine("phone: " + c.phone);
+    addLine("email: " + c.email);
+    addLine("address: " + c.address);
+    addLine("notes: " + c.notes);
+
     return;
   }
 
   if (cmd === "setcustomer") {
-    if (args.length < 3) {
-      addLine("usage: setcustomer <id> <field> <value>");
-      return;
-    }
 
-    const id = args[0];
-    const field = args[1];
-    const value = args.slice(2).join(" ");
+    const id=args[0];
+    const field=args[1];
+    const value=args.slice(2).join(" ");
 
-    const c = state.customers.find(x => x.id === id);
+    const c = state.customers.find(x=>x.id===id);
 
-    if (!c) {
+    if(!c){
       addLine("customer not found");
       return;
     }
 
-    if (!["name", "phone", "email", "address", "notes"].includes(field)) {
-      addLine("invalid field");
-      return;
-    }
+    c[field]=value;
 
-    c[field] = value;
     await saveAll();
     addLine("updated");
+
     return;
   }
 
-  if (cmd === "newjob") {
-    const id = crypto.randomUUID().slice(0, 8);
+  /* =========================
+     jobs
+  ========================= */
 
-    const job = {
+  if (cmd === "newjob") {
+
+    const id = crypto.randomUUID().slice(0,8);
+
+    const job={
       id,
-      customer: "",
-      address: "",
-      technician: "",
-      status: "scheduled",
-      scheduled_date: "",
-      start_time: "",
-      end_time: "",
-      materials: "",
-      labor: "",
-      notes: "",
-      photos: [],
-      signature: "",
-      createdAt: nowIso()
+      customer:"",
+      address:"",
+      technician:"",
+      status:"scheduled",
+      notes:"",
+      createdAt:nowIso()
     };
 
     state.jobs.push(job);
+
     await saveAll();
 
     addLine("job created");
-    addLine("job id: " + id);
-    addLine("edit fields using:");
-    addLine("setjob " + id + " customer <customer>");
-    addLine("setjob " + id + " address <address>");
-    addLine("setjob " + id + " technician <name>");
-    addLine("setjob " + id + " scheduled_date <date>");
-    addLine("setjob " + id + " notes <text>");
+    addLine("id: "+id);
+
     return;
   }
 
-  if (cmd === "jobs") {
-    if (state.jobs.length === 0) {
+  if(cmd==="jobs"){
+
+    if(state.jobs.length===0){
       addLine("no jobs");
       return;
     }
 
-    state.jobs.forEach(j => {
-      addLine(j.id + " " + (j.customer || "(no customer)") + " [" + j.status + "]");
+    state.jobs.forEach(j=>{
+      addLine(j.id+" "+(j.customer||"(no customer)")+" ["+j.status+"]");
     });
 
     return;
   }
 
-  if (cmd === "viewjob") {
-    if (args.length < 1) {
-      addLine("usage: viewjob <id>");
-      return;
-    }
+  if(cmd==="viewjob"){
 
-    const j = state.jobs.find(x => x.id === args[0]);
+    const j=state.jobs.find(x=>x.id===args[0]);
 
-    if (!j) {
+    if(!j){
       addLine("job not found");
       return;
     }
 
-    addLine("job " + j.id);
-    addLine("customer: " + j.customer);
-    addLine("address: " + j.address);
-    addLine("technician: " + j.technician);
-    addLine("status: " + j.status);
-    addLine("scheduled: " + j.scheduled_date);
-    addLine("start: " + j.start_time);
-    addLine("end: " + j.end_time);
-    addLine("materials: " + j.materials);
-    addLine("labor: " + j.labor);
-    addLine("notes: " + j.notes);
+    addLine("job "+j.id);
+    addLine("customer: "+j.customer);
+    addLine("address: "+j.address);
+    addLine("technician: "+j.technician);
+    addLine("status: "+j.status);
+    addLine("notes: "+j.notes);
+
     return;
   }
 
-  if (cmd === "setjob") {
-    if (args.length < 3) {
-      addLine("usage: setjob <id> <field> <value>");
-      return;
-    }
+  if(cmd==="setjob"){
 
-    const id = args[0];
-    const field = args[1];
-    const value = args.slice(2).join(" ");
+    const id=args[0];
+    const field=args[1];
+    const value=args.slice(2).join(" ");
 
-    const j = state.jobs.find(x => x.id === id);
+    const j=state.jobs.find(x=>x.id===id);
 
-    if (!j) {
+    if(!j){
       addLine("job not found");
       return;
     }
 
-    if (!Object.prototype.hasOwnProperty.call(j, field)) {
-      addLine("invalid field");
-      return;
-    }
+    j[field]=value;
 
-    j[field] = value;
     await saveAll();
     addLine("job updated");
+
     return;
   }
 
-  if (cmd === "newreceipt") {
-    const id = crypto.randomUUID().slice(0, 8);
+  /* =========================
+     receipts
+  ========================= */
 
-    const receipt = {
+  if(cmd==="newreceipt"){
+
+    const id=crypto.randomUUID().slice(0,8);
+
+    const r={
       id,
-      vendor: "",
-      amount: "",
-      date: "",
-      job: "",
-      category: "",
-      notes: "",
-      createdAt: nowIso()
+      vendor:"",
+      amount:"",
+      date:"",
+      job:"",
+      category:"",
+      notes:"",
+      createdAt:nowIso()
     };
 
-    state.receipts.push(receipt);
+    state.receipts.push(r);
+
     await saveAll();
 
     addLine("receipt created");
-    addLine("receipt id: " + id);
-    addLine("edit fields using:");
-    addLine("setreceipt " + id + " vendor <vendor>");
-    addLine("setreceipt " + id + " amount <amount>");
-    addLine("setreceipt " + id + " date <date>");
-    addLine("setreceipt " + id + " job <job id>");
-    addLine("setreceipt " + id + " category <category>");
-    addLine("setreceipt " + id + " notes <notes>");
+    addLine("id: "+id);
+
     return;
   }
 
-  if (cmd === "receipts") {
-    if (state.receipts.length === 0) {
+  if(cmd==="receipts"){
+
+    if(state.receipts.length===0){
       addLine("no receipts");
       return;
     }
 
-    state.receipts.forEach(r => {
-      addLine(
-        r.id +
-        " " +
-        (r.vendor || "(no vendor)") +
-        " $" +
-        (r.amount || "0") +
-        " " +
-        (r.job ? "[job " + r.job + "]" : "")
-      );
+    state.receipts.forEach(r=>{
+      addLine(r.id+" "+(r.vendor||"(no vendor)")+" $"+(r.amount||"0"));
     });
 
     return;
   }
 
-  if (cmd === "viewreceipt") {
-    if (args.length < 1) {
-      addLine("usage: viewreceipt <id>");
-      return;
-    }
+  if(cmd==="viewreceipt"){
 
-    const r = state.receipts.find(x => x.id === args[0]);
+    const r=state.receipts.find(x=>x.id===args[0]);
 
-    if (!r) {
+    if(!r){
       addLine("receipt not found");
       return;
     }
 
-    addLine("receipt " + r.id);
-    addLine("vendor: " + r.vendor);
-    addLine("amount: " + r.amount);
-    addLine("date: " + r.date);
-    addLine("job: " + r.job);
-    addLine("category: " + r.category);
-    addLine("notes: " + r.notes);
+    addLine("receipt "+r.id);
+    addLine("vendor: "+r.vendor);
+    addLine("amount: "+r.amount);
+    addLine("date: "+r.date);
+    addLine("job: "+r.job);
+    addLine("category: "+r.category);
+    addLine("notes: "+r.notes);
+
     return;
   }
 
-  if (cmd === "setreceipt") {
-    if (args.length < 3) {
-      addLine("usage: setreceipt <id> <field> <value>");
-      return;
-    }
+  if(cmd==="setreceipt"){
 
-    const id = args[0];
-    const field = args[1];
-    const value = args.slice(2).join(" ");
+    const id=args[0];
+    const field=args[1];
+    const value=args.slice(2).join(" ");
 
-    const r = state.receipts.find(x => x.id === id);
+    const r=state.receipts.find(x=>x.id===id);
 
-    if (!r) {
+    if(!r){
       addLine("receipt not found");
       return;
     }
 
-    if (!["vendor", "amount", "date", "job", "category", "notes"].includes(field)) {
-      addLine("invalid field");
-      return;
-    }
+    r[field]=value;
 
-    r[field] = value;
     await saveAll();
     addLine("receipt updated");
+
     return;
   }
 
-  if (cmd === "entry" && args[0] === "directory") {
-    if (formForDirCompleted(state.cwdId)) {
-      addLine("error: form already completed in this directory");
+  if(cmd==="jobreceipts"){
+
+    const jobid=args[0];
+
+    const list=state.receipts.filter(r=>r.job===jobid);
+
+    if(list.length===0){
+      addLine("no receipts for job "+jobid);
       return;
     }
 
-    if (formForDirDraft(state.cwdId)) {
-      addLine("error: draft already exists. use complete form or cancelform");
-      return;
-    }
-
-    state.wizard = {
-      mode: "formname",
-      dirId: state.cwdId,
-      name: "",
-      questions: []
-    };
-
-    addLine("form name?");
-    return;
-  }
-
-  if (cmd === "complete" && args[0] === "form") {
-    const d = formForDirDraft(state.cwdId);
-
-    if (!d) {
-      addLine("error: no draft form in this directory");
-      return;
-    }
-
-    if (!d.name || d.questions.length === 0) {
-      addLine("error: draft incomplete");
-      return;
-    }
-
-    d.status = "completed";
-    d.version = versionForForm(d.name, d.questions);
-    await saveAll();
-    addLine("form completed");
-    emitFormInfoIfAny(state.cwdId);
-    return;
-  }
-
-  if (cmd === "cancelform") {
-    const d = formForDirDraft(state.cwdId);
-
-    if (!d) {
-      addLine("error: no draft form");
-      return;
-    }
-
-    state.forms = state.forms.filter(f => !(f.dirId === state.cwdId && f.status === "draft"));
-    state.wizard = null;
-    await saveAll();
-    addLine("draft discarded");
-    return;
-  }
-
-  if (cmd === "answer") {
-    if (args.length < 2) {
-      addLine("error: answer <q#> <text...>");
-      return;
-    }
-
-    const f = formForDirCompleted(state.cwdId);
-    if (!f) {
-      addLine("error: no completed form in this directory");
-      return;
-    }
-
-    const qn = parseInt(args[0].replace("q", ""), 10);
-    if (!Number.isFinite(qn) || qn < 1 || qn > f.questions.length) {
-      addLine("error: invalid question number");
-      return;
-    }
-
-    state.currentAnswers[qn] = joinRest(args.slice(1));
-    addLine(`ok (q${qn})`);
-    return;
-  }
-
-  if (cmd === "clearanswers") {
-    state.currentAnswers = {};
-    addLine("ok");
-    return;
-  }
-
-  if (cmd === "submit") {
-    const f = formForDirCompleted(state.cwdId);
-
-    if (!f) {
-      addLine("error: no completed form in this directory");
-      return;
-    }
-
-    for (let i = 1; i <= f.questions.length; i++) {
-      if (!state.currentAnswers[i] || state.currentAnswers[i].trim() === "") {
-        addLine(`error: missing answer q${i}`);
-        return;
-      }
-    }
-
-    const id = crypto.randomUUID().slice(0, 8);
-    const answers = {};
-
-    for (let i = 1; i <= f.questions.length; i++) {
-      answers["q" + i] = state.currentAnswers[i];
-    }
-
-    state.submissions.push({
-      id,
-      dirId: state.cwdId,
-      formVersion: f.version,
-      answers,
-      createdAt: nowIso()
+    list.forEach(r=>{
+      addLine(r.id+" "+(r.vendor||"(no vendor)")+" $"+(r.amount||"0"));
     });
 
-    state.currentAnswers = {};
-    await saveAll();
-    addLine(`saved submission ${id}`);
     return;
   }
 
-  if (cmd === "submissions") {
-    const items = state.submissions
-      .filter(s => s.dirId === state.cwdId)
-      .slice(-20)
-      .reverse();
+  if(cmd==="jobtotal"){
 
-    if (items.length === 0) {
-      addLine("(none)");
+    const jobid=args[0];
+
+    const list=state.receipts.filter(r=>r.job===jobid);
+
+    if(list.length===0){
+      addLine("no receipts for job "+jobid);
       return;
     }
 
-    items.forEach(s => addLine(`${s.id} ${s.createdAt}`));
-    return;
-  }
+    let total=0;
 
-  if (cmd === "view") {
-    if (args.length < 1) {
-      addLine("error: view <id>");
-      return;
-    }
-
-    const s = state.submissions.find(x => x.id === args[0] && x.dirId === state.cwdId);
-    if (!s) {
-      addLine("not found");
-      return;
-    }
-
-    const f = formForDirCompleted(state.cwdId);
-    const questions = f ? f.questions : [];
-
-    addLine(`submission ${s.id}`);
-    questions.forEach((q, i) => {
-      addLine(`q${i + 1}: ${q}`);
-      addLine(`${s.answers["q" + (i + 1)] ?? ""}`);
+    list.forEach(r=>{
+      const amt=parseFloat(r.amount);
+      if(!isNaN(amt)) total+=amt;
     });
+
+    addLine("job "+jobid+" receipt total: $"+total.toFixed(2));
 
     return;
   }
@@ -1619,21 +793,17 @@ pre{white-space:pre-wrap;word-wrap:break-word;overflow-wrap:anywhere;font-family
 /* =========================
    boot
 ========================= */
-(async function boot() {
+(async function boot(){
+
   await loadAll();
 
-  addLine(APP_NAME + " ready");
-  addLine(`role: ${localStorage.getItem("spirenet_role") || "operator"}`);
+  addLine(APP_NAME+" ready");
   addLine('type "help" to list commands');
-  addLine('type "cmmdhelp" for descriptions');
-
-  if (state.adminUnlocked) {
-    addLine("admin barrier unlocked");
-  }
 
   render();
 
-  setTimeout(() => {
-    try { input.focus(); } catch (e) {}
-  }, 700);
+  setTimeout(()=>{
+    try{input.focus();}catch(e){}
+  },700);
+
 })();
