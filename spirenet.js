@@ -3,7 +3,7 @@ if (localStorage.getItem("spirenet_usb_verified") !== "true") {
 }
 
 const APP_NAME = "spirenet";
-const DB_NAME = "spirenet_cli_db_v4";
+const DB_NAME = "spirenet_cli_db_v5";
 const DB_VERSION = 1;
 
 const terminal = document.getElementById("terminal");
@@ -94,6 +94,9 @@ const state = {
 
   currentUser: "operator",
   adminUnlocked: localStorage.getItem("spirenet_role") === "admin",
+
+  customers: [],
+  jobs: [],
 
   rootId: null,
   cwdId: null,
@@ -406,7 +409,9 @@ async function saveAll() {
     activeFileName: state.activeFileName,
     nodes: state.nodes,
     forms: state.forms,
-    submissions: state.submissions
+    submissions: state.submissions,
+    customers: state.customers,
+    jobs: state.jobs
   });
 }
 
@@ -422,6 +427,8 @@ async function loadAll() {
     state.nodes = saved.nodes || [];
     state.forms = saved.forms || [];
     state.submissions = saved.submissions || [];
+    state.customers = saved.customers || [];
+    state.jobs = saved.jobs || [];
     state.cwdPath = pathOf(state.cwdId || state.rootId) || "/spirenet";
     state.adminUnlocked = localStorage.getItem("spirenet_role") === "admin";
     syncAdminFiles();
@@ -509,6 +516,8 @@ async function loadAll() {
   state.activeFileName = null;
   state.forms = [];
   state.submissions = [];
+  state.customers = [];
+  state.jobs = [];
   state.adminUnlocked = localStorage.getItem("spirenet_role") === "admin";
 
   syncAdminFiles();
@@ -540,6 +549,14 @@ const COMMANDS = [
   ["cancel", "exit edit mode without saving"],
   ["preview <filename>", "show rendered table view"],
   ["printpg", "print user/cwd/file/file view"],
+  ["newcustomer", "create a customer record"],
+  ["customers", "list all customers"],
+  ["viewcustomer <id>", "view customer record"],
+  ["setcustomer <id> <field> <value>", "edit customer field"],
+  ["newjob", "create new job"],
+  ["jobs", "list jobs"],
+  ["viewjob <id>", "view job record"],
+  ["setjob <id> <field> <value>", "edit job field"],
   ["entry directory", "start form wizard for current directory"],
   ["complete form", "complete form draft"],
   ["cancelform", "discard draft form"],
@@ -1133,6 +1150,198 @@ pre{white-space:pre-wrap;word-wrap:break-word;overflow-wrap:anywhere;font-family
     return;
   }
 
+  if (cmd === "newcustomer") {
+    const id = crypto.randomUUID().slice(0, 8);
+
+    const customer = {
+      id,
+      name: "",
+      phone: "",
+      email: "",
+      address: "",
+      notes: "",
+      createdAt: nowIso()
+    };
+
+    state.customers.push(customer);
+    await saveAll();
+
+    addLine("customer created");
+    addLine("customer id: " + id);
+    addLine("edit fields using:");
+    addLine("setcustomer " + id + " name <name>");
+    addLine("setcustomer " + id + " phone <phone>");
+    addLine("setcustomer " + id + " email <email>");
+    addLine("setcustomer " + id + " address <address>");
+    addLine("setcustomer " + id + " notes <notes>");
+    return;
+  }
+
+  if (cmd === "customers") {
+    if (state.customers.length === 0) {
+      addLine("no customers");
+      return;
+    }
+
+    state.customers.forEach(c => {
+      addLine(c.id + " " + (c.name || "(unnamed)"));
+    });
+
+    return;
+  }
+
+  if (cmd === "viewcustomer") {
+    if (args.length < 1) {
+      addLine("error: viewcustomer <id>");
+      return;
+    }
+
+    const c = state.customers.find(x => x.id === args[0]);
+
+    if (!c) {
+      addLine("customer not found");
+      return;
+    }
+
+    addLine("customer " + c.id);
+    addLine("name: " + (c.name || ""));
+    addLine("phone: " + (c.phone || ""));
+    addLine("email: " + (c.email || ""));
+    addLine("address: " + (c.address || ""));
+    addLine("notes: " + (c.notes || ""));
+    return;
+  }
+
+  if (cmd === "setcustomer") {
+    if (args.length < 3) {
+      addLine("usage: setcustomer <id> <field> <value>");
+      return;
+    }
+
+    const id = args[0];
+    const field = args[1];
+    const value = args.slice(2).join(" ");
+
+    const c = state.customers.find(x => x.id === id);
+
+    if (!c) {
+      addLine("customer not found");
+      return;
+    }
+
+    if (!["name", "phone", "email", "address", "notes"].includes(field)) {
+      addLine("invalid field");
+      return;
+    }
+
+    c[field] = value;
+    await saveAll();
+    addLine("updated");
+    return;
+  }
+
+  if (cmd === "newjob") {
+    const id = crypto.randomUUID().slice(0, 8);
+
+    const job = {
+      id,
+      customer: "",
+      address: "",
+      technician: "",
+      status: "scheduled",
+      scheduled_date: "",
+      start_time: "",
+      end_time: "",
+      materials: "",
+      labor: "",
+      notes: "",
+      photos: [],
+      signature: "",
+      createdAt: nowIso()
+    };
+
+    state.jobs.push(job);
+    await saveAll();
+
+    addLine("job created");
+    addLine("job id: " + id);
+    addLine("edit fields using:");
+    addLine("setjob " + id + " customer <customer>");
+    addLine("setjob " + id + " address <address>");
+    addLine("setjob " + id + " technician <name>");
+    addLine("setjob " + id + " scheduled_date <date>");
+    addLine("setjob " + id + " notes <text>");
+    return;
+  }
+
+  if (cmd === "jobs") {
+    if (state.jobs.length === 0) {
+      addLine("no jobs");
+      return;
+    }
+
+    state.jobs.forEach(j => {
+      addLine(j.id + " " + (j.customer || "(no customer)") + " [" + j.status + "]");
+    });
+
+    return;
+  }
+
+  if (cmd === "viewjob") {
+    if (args.length < 1) {
+      addLine("usage: viewjob <id>");
+      return;
+    }
+
+    const j = state.jobs.find(x => x.id === args[0]);
+
+    if (!j) {
+      addLine("job not found");
+      return;
+    }
+
+    addLine("job " + j.id);
+    addLine("customer: " + j.customer);
+    addLine("address: " + j.address);
+    addLine("technician: " + j.technician);
+    addLine("status: " + j.status);
+    addLine("scheduled: " + j.scheduled_date);
+    addLine("start: " + j.start_time);
+    addLine("end: " + j.end_time);
+    addLine("materials: " + j.materials);
+    addLine("labor: " + j.labor);
+    addLine("notes: " + j.notes);
+    return;
+  }
+
+  if (cmd === "setjob") {
+    if (args.length < 3) {
+      addLine("usage: setjob <id> <field> <value>");
+      return;
+    }
+
+    const id = args[0];
+    const field = args[1];
+    const value = args.slice(2).join(" ");
+
+    const j = state.jobs.find(x => x.id === id);
+
+    if (!j) {
+      addLine("job not found");
+      return;
+    }
+
+    if (!Object.prototype.hasOwnProperty.call(j, field)) {
+      addLine("invalid field");
+      return;
+    }
+
+    j[field] = value;
+    await saveAll();
+    addLine("job updated");
+    return;
+  }
+
   if (cmd === "entry" && args[0] === "directory") {
     if (formForDirCompleted(state.cwdId)) {
       addLine("error: form already completed in this directory");
@@ -1314,6 +1523,7 @@ pre{white-space:pre-wrap;word-wrap:break-word;overflow-wrap:anywhere;font-family
   }
 
   render();
+
   setTimeout(() => {
     try { input.focus(); } catch (e) {}
   }, 700);
