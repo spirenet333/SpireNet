@@ -3,7 +3,7 @@ if (localStorage.getItem("spirenet_usb_verified") !== "true") {
 }
 
 const APP_NAME = "spirenet";
-const DB_NAME = "spirenet_cli_db_v11";
+const DB_NAME = "spirenet_cli_db_v12";
 const DB_VERSION = 1;
 
 const terminal = document.getElementById("terminal");
@@ -105,6 +105,18 @@ const state = {
   customers: [],
   jobs: [],
   receipts: [],
+  invoices: [],
+  payments: [],
+  businessplan: {
+    revenue_target: 0,
+    job_target: 0,
+    profit_target: 0,
+    marketing_budget: 0,
+    labor_budget: 0,
+    materials_budget: 0,
+    customer_growth: 0,
+    review_target: 0
+  },
 
   rootId: null,
   cwdId: null,
@@ -421,6 +433,146 @@ pre{white-space:pre-wrap;word-wrap:break-word;overflow-wrap:anywhere;font-family
 <script>setTimeout(()=>{window.print()},400)<\/script>
 </body></html>`;
 }
+
+function buildFinancialReportHtml() {
+  const revenue = state.receipts.reduce((t, r) => t + (parseFloat(r.amount) || 0), 0);
+
+  const materials = state.receipts
+    .filter(r => lc(r.category) === "materials")
+    .reduce((t, r) => t + (parseFloat(r.amount) || 0), 0);
+
+  const labor = state.receipts
+    .filter(r => lc(r.category) === "labor")
+    .reduce((t, r) => t + (parseFloat(r.amount) || 0), 0);
+
+  const marketing = state.receipts
+    .filter(r => lc(r.category) === "marketing")
+    .reduce((t, r) => t + (parseFloat(r.amount) || 0), 0);
+
+  const profit = revenue - materials - labor - marketing;
+  const margin = revenue ? ((profit / revenue) * 100).toFixed(1) : 0;
+
+  const body = `financial report
+
+revenue:        $${revenue.toFixed(2)}
+materials:      $${materials.toFixed(2)}
+labor:          $${labor.toFixed(2)}
+marketing:      $${marketing.toFixed(2)}
+
+--------------------------------
+
+profit:         $${profit.toFixed(2)}
+profit margin:  ${margin}%
+`;
+
+  const safe = escapeHtml(body);
+
+  return `<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>financial report</title>
+<style>
+body{font-family:menlo,monospace;font-size:12px;margin:40px;color:#000;background:#fff;}
+pre{white-space:pre-wrap;font-family:menlo,monospace;font-size:12px;}
+</style>
+</head><body><pre>${safe}</pre>
+<script>setTimeout(()=>{window.print()},400)<\/script>
+</body></html>`;
+}
+
+function buildTaxReportHtml() {
+  const revenue = state.receipts.reduce((t, r) => t + (parseFloat(r.amount) || 0), 0);
+
+  const materials = state.receipts
+    .filter(r => lc(r.category) === "materials")
+    .reduce((t, r) => t + (parseFloat(r.amount) || 0), 0);
+
+  const labor = state.receipts
+    .filter(r => lc(r.category) === "labor")
+    .reduce((t, r) => t + (parseFloat(r.amount) || 0), 0);
+
+  const marketing = state.receipts
+    .filter(r => lc(r.category) === "marketing")
+    .reduce((t, r) => t + (parseFloat(r.amount) || 0), 0);
+
+  const totalExpenses = materials + labor + marketing;
+  const taxableProfit = revenue - totalExpenses;
+
+  const body = `tax report
+
+revenue:           $${revenue.toFixed(2)}
+
+deductible expenses
+
+materials:         $${materials.toFixed(2)}
+labor:             $${labor.toFixed(2)}
+marketing:         $${marketing.toFixed(2)}
+
+--------------------------------
+
+total expenses:    $${totalExpenses.toFixed(2)}
+
+taxable profit:    $${taxableProfit.toFixed(2)}
+`;
+
+  const safe = escapeHtml(body);
+
+  return `<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>tax report</title>
+<style>
+body{font-family:menlo,monospace;font-size:12px;margin:40px;color:#000;background:#fff;}
+pre{white-space:pre-wrap;font-family:menlo,monospace;font-size:12px;}
+</style>
+</head><body><pre>${safe}</pre>
+<script>setTimeout(()=>{window.print()},400)<\/script>
+</body></html>`;
+}
+
+function buildDashboardReportHtml() {
+  const plan = state.businessplan;
+
+  const revenue = state.receipts.reduce((t, r) => t + (parseFloat(r.amount) || 0), 0);
+  const jobs = state.jobs.length;
+  const customers = state.customers.length;
+
+  const revenuePct = plan.revenue_target ? ((revenue / plan.revenue_target) * 100).toFixed(1) : 0;
+  const jobsPct = plan.job_target ? ((jobs / plan.job_target) * 100).toFixed(1) : 0;
+  const customerPct = plan.customer_growth ? ((customers / plan.customer_growth) * 100).toFixed(1) : 0;
+
+  const body = `executive dashboard
+
+revenue:           $${revenue.toFixed(2)}
+revenue target:    $${plan.revenue_target}
+progress:          ${revenuePct}%
+
+jobs completed:    ${jobs}
+job target:        ${plan.job_target}
+progress:          ${jobsPct}%
+
+customers:         ${customers}
+customer target:   ${plan.customer_growth}
+progress:          ${customerPct}%
+
+budgets
+
+marketing budget:  $${plan.marketing_budget}
+labor budget:      $${plan.labor_budget}
+materials budget:  $${plan.materials_budget}
+`;
+
+  const safe = escapeHtml(body);
+
+  return `<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>dashboard report</title>
+<style>
+body{font-family:menlo,monospace;font-size:12px;margin:40px;color:#000;background:#fff;}
+pre{white-space:pre-wrap;font-family:menlo,monospace;font-size:12px;}
+</style>
+</head><body><pre>${safe}</pre>
+<script>setTimeout(()=>{window.print()},400)<\/script>
+</body></html>`;
+}
 /* =========================
    persistence
 ========================= */
@@ -462,7 +614,10 @@ async function saveAll() {
     nodes: state.nodes,
     customers: state.customers,
     jobs: state.jobs,
-    receipts: state.receipts
+    receipts: state.receipts,
+    invoices: state.invoices,
+    payments: state.payments,
+    businessplan: state.businessplan
   });
 }
 
@@ -479,6 +634,9 @@ async function loadAll() {
     state.customers = saved.customers || [];
     state.jobs = saved.jobs || [];
     state.receipts = saved.receipts || [];
+    state.invoices = saved.invoices || [];
+    state.payments = saved.payments || [];
+    state.businessplan = saved.businessplan || state.businessplan;
     state.cwdPath = pathOf(state.cwdId || state.rootId) || "/spirenet";
     state.adminUnlocked = localStorage.getItem("spirenet_role") === "admin";
     syncAdminFiles();
@@ -503,24 +661,6 @@ async function loadAll() {
     createdAt: nowIso()
   };
 
-  const net = {
-    id: crypto.randomUUID(),
-    parentId: root.id,
-    name: "net",
-    type: "dir",
-    content: null,
-    createdAt: nowIso()
-  };
-
-  const job = {
-    id: crypto.randomUUID(),
-    parentId: root.id,
-    name: "job",
-    type: "dir",
-    content: null,
-    createdAt: nowIso()
-  };
-
   const adminRole = {
     id: crypto.randomUUID(),
     parentId: admin.id,
@@ -530,7 +670,7 @@ async function loadAll() {
     createdAt: nowIso()
   };
 
-  state.nodes = [root, admin, net, job, adminRole];
+  state.nodes = [root, admin, adminRole];
   state.rootId = root.id;
   state.cwdId = root.id;
   state.cwdPath = "/spirenet";
@@ -539,6 +679,8 @@ async function loadAll() {
   state.customers = [];
   state.jobs = [];
   state.receipts = [];
+  state.invoices = [];
+  state.payments = [];
   state.adminUnlocked = localStorage.getItem("spirenet_role") === "admin";
 
   syncAdminFiles();
@@ -567,21 +709,42 @@ const COMMANDS = [
   ["preview <file>", "preview file"],
   ["printpg", "print active file"],
   ["printdir", "print entire directory"],
+
   ["newcustomer", "create customer"],
   ["customers", "list customers"],
   ["viewcustomer <id>", "view customer"],
   ["setcustomer <id> <field> <value>", "edit customer"],
+
   ["newjob", "create job"],
   ["jobs", "list jobs"],
   ["viewjob <id>", "view job"],
   ["setjob <id> <field> <value>", "edit job"],
   ["printjob <id>", "print job packet"],
+
   ["newreceipt", "create receipt"],
   ["receipts", "list receipts"],
   ["viewreceipt <id>", "view receipt"],
   ["setreceipt <id> <field> <value>", "edit receipt"],
   ["jobreceipts <jobid>", "receipts for job"],
   ["jobtotal <jobid>", "receipt totals"],
+
+  ["newinvoice", "create invoice"],
+  ["invoices", "list invoices"],
+  ["viewinvoice <id>", "view invoice"],
+  ["setinvoice <id> <field> <value>", "edit invoice"],
+
+  ["newpayment", "record payment"],
+  ["payments", "list payments"],
+  ["viewpayment <id>", "view payment"],
+
+  ["businessplan", "view business plan"],
+  ["setplan <field> <value>", "set business plan target"],
+  ["scorecard", "compare performance vs plan"],
+
+  ["report financial", "financial statement report"],
+  ["report tax", "tax summary report"],
+  ["report dashboard", "executive business dashboard"],
+
   ["adminauth", "unlock admin barrier"],
   ["clear", "clear terminal"]
 ];
@@ -645,6 +808,8 @@ async function handleLine(line) {
     addLine(`customers: ${state.customers.length}`);
     addLine(`jobs: ${state.jobs.length}`);
     addLine(`receipts: ${state.receipts.length}`);
+    addLine(`invoices: ${state.invoices.length}`);
+    addLine(`payments: ${state.payments.length}`);
     return;
   }
 
@@ -949,9 +1114,11 @@ async function handleLine(line) {
 
   if (cmd === "newjob") {
     const id = crypto.randomUUID().slice(0, 8);
+    const folderName = "job_" + id;
 
     state.jobs.push({
       id,
+      folder: folderName,
       customer: "",
       address: "",
       technician: "",
@@ -966,8 +1133,56 @@ async function handleLine(line) {
       signature: ""
     });
 
+    const jobDir = {
+      id: crypto.randomUUID(),
+      parentId: state.rootId,
+      name: folderName,
+      type: "dir",
+      content: null,
+      createdAt: nowIso()
+    };
+
+    const infoFile = {
+      id: crypto.randomUUID(),
+      parentId: jobDir.id,
+      name: "info",
+      type: "file",
+      content: `job id: ${id}\nstatus: scheduled`,
+      createdAt: nowIso()
+    };
+
+    const notesFile = {
+      id: crypto.randomUUID(),
+      parentId: jobDir.id,
+      name: "notes",
+      type: "file",
+      content: "",
+      createdAt: nowIso()
+    };
+
+    const materialsFile = {
+      id: crypto.randomUUID(),
+      parentId: jobDir.id,
+      name: "materials",
+      type: "file",
+      content: "",
+      createdAt: nowIso()
+    };
+
+    const laborFile = {
+      id: crypto.randomUUID(),
+      parentId: jobDir.id,
+      name: "labor",
+      type: "file",
+      content: "",
+      createdAt: nowIso()
+    };
+
+    state.nodes.push(jobDir, infoFile, notesFile, materialsFile, laborFile);
+
     await saveAll();
     addLine(`job created: ${id}`);
+    addLine(`folder created: ${folderName}`);
     return;
   }
 
@@ -994,6 +1209,7 @@ async function handleLine(line) {
     }
 
     addLine(`id: ${j.id}`);
+    addLine(`folder: ${j.folder || ""}`);
     addLine(`customer: ${j.customer}`);
     addLine(`address: ${j.address}`);
     addLine(`technician: ${j.technician}`);
@@ -1020,6 +1236,27 @@ async function handleLine(line) {
     }
 
     j[field] = val;
+
+    if (j.folder) {
+      const jobDir = childByName(state.rootId, j.folder);
+      if (jobDir) {
+        const infoFile = childByName(jobDir.id, "info");
+        if (infoFile && infoFile.type === "file") {
+          infoFile.content =
+`job id: ${j.id}
+customer: ${j.customer}
+address: ${j.address}
+technician: ${j.technician}
+status: ${j.status}
+scheduled_date: ${j.scheduled_date}
+start_time: ${j.start_time}
+end_time: ${j.end_time}
+materials: ${j.materials}
+labor: ${j.labor}
+notes: ${j.notes}`;
+        }
+      }
+    }
 
     await saveAll();
     addLine("job updated");
@@ -1138,12 +1375,205 @@ async function handleLine(line) {
     return;
   }
 
+  if (cmd === "newinvoice") {
+    const id = crypto.randomUUID().slice(0, 8);
+
+    state.invoices.push({
+      id,
+      customer: "",
+      job: "",
+      amount: 0,
+      date: "",
+      status: "unpaid"
+    });
+
+    await saveAll();
+    addLine(`invoice created: ${id}`);
+    return;
+  }
+
+  if (cmd === "invoices") {
+    if (!state.invoices.length) {
+      addLine("(none)");
+      return;
+    }
+
+    state.invoices.forEach(i => {
+      addLine(`${i.id} ${i.customer} $${i.amount} [${i.status}]`);
+    });
+
+    return;
+  }
+
+  if (cmd === "viewinvoice") {
+    const id = args[0];
+    const i = state.invoices.find(x => x.id === id);
+
+    if (!i) {
+      addLine("invoice not found");
+      return;
+    }
+
+    addLine(`id: ${i.id}`);
+    addLine(`customer: ${i.customer}`);
+    addLine(`job: ${i.job}`);
+    addLine(`amount: ${i.amount}`);
+    addLine(`date: ${i.date}`);
+    addLine(`status: ${i.status}`);
+    return;
+  }
+
+  if (cmd === "setinvoice") {
+    const id = args[0];
+    const field = args[1];
+    const val = args.slice(2).join(" ");
+
+    const i = state.invoices.find(x => x.id === id);
+
+    if (!i) {
+      addLine("invoice not found");
+      return;
+    }
+
+    if (field === "amount") i.amount = parseFloat(val) || 0;
+    else i[field] = val;
+
+    await saveAll();
+    addLine("invoice updated");
+    return;
+  }
+
+  if (cmd === "newpayment") {
+    const id = crypto.randomUUID().slice(0, 8);
+
+    state.payments.push({
+      id,
+      invoice: "",
+      amount: 0,
+      date: "",
+      method: ""
+    });
+
+    await saveAll();
+    addLine(`payment recorded: ${id}`);
+    return;
+  }
+
+  if (cmd === "payments") {
+    if (!state.payments.length) {
+      addLine("(none)");
+      return;
+    }
+
+    state.payments.forEach(p => {
+      addLine(`${p.id} invoice:${p.invoice} $${p.amount}`);
+    });
+
+    return;
+  }
+
+  if (cmd === "viewpayment") {
+    const id = args[0];
+    const p = state.payments.find(x => x.id === id);
+
+    if (!p) {
+      addLine("payment not found");
+      return;
+    }
+
+    addLine(`id: ${p.id}`);
+    addLine(`invoice: ${p.invoice}`);
+    addLine(`amount: ${p.amount}`);
+    addLine(`date: ${p.date}`);
+    addLine(`method: ${p.method}`);
+    return;
+  }
+
+  if (cmd === "businessplan") {
+    const p = state.businessplan;
+
+    addLine("business plan targets");
+    addLine(`revenue_target: ${p.revenue_target}`);
+    addLine(`job_target: ${p.job_target}`);
+    addLine(`profit_target: ${p.profit_target}`);
+    addLine(`marketing_budget: ${p.marketing_budget}`);
+    addLine(`labor_budget: ${p.labor_budget}`);
+    addLine(`materials_budget: ${p.materials_budget}`);
+    addLine(`customer_growth: ${p.customer_growth}`);
+    addLine(`review_target: ${p.review_target}`);
+    return;
+  }
+
+  if (cmd === "setplan") {
+    const field = args[0];
+    const val = parseFloat(args[1]);
+
+    if (!state.businessplan.hasOwnProperty(field)) {
+      addLine("invalid plan field");
+      return;
+    }
+
+    state.businessplan[field] = isNaN(val) ? 0 : val;
+
+    await saveAll();
+    addLine("plan updated");
+    return;
+  }
+
+  if (cmd === "scorecard") {
+    const p = state.businessplan;
+
+    const revenue = state.receipts.reduce((t, r) => t + (parseFloat(r.amount) || 0), 0);
+    const jobs = state.jobs.length;
+    const customers = state.customers.length;
+
+    addLine("scorecard");
+    addLine("");
+    addLine(`revenue: ${revenue} / target ${p.revenue_target}`);
+    addLine(`jobs: ${jobs} / target ${p.job_target}`);
+    addLine(`customers: ${customers} / target ${p.customer_growth}`);
+
+    const revenuePct = p.revenue_target ? ((revenue / p.revenue_target) * 100).toFixed(1) : 0;
+    const jobsPct = p.job_target ? ((jobs / p.job_target) * 100).toFixed(1) : 0;
+
+    addLine("");
+    addLine(`revenue progress: ${revenuePct}%`);
+    addLine(`job progress: ${jobsPct}%`);
+    return;
+  }
+
+  if (cmd === "report" && args[0] === "financial") {
+    const w = window.open("", "_blank");
+    w.document.write(buildFinancialReportHtml());
+    w.document.close();
+
+    addLine("financial report opened");
+    return;
+  }
+
+  if (cmd === "report" && args[0] === "tax") {
+    const w = window.open("", "_blank");
+    w.document.write(buildTaxReportHtml());
+    w.document.close();
+
+    addLine("tax report opened");
+    return;
+  }
+
+  if (cmd === "report" && args[0] === "dashboard") {
+    const w = window.open("", "_blank");
+    w.document.write(buildDashboardReportHtml());
+    w.document.close();
+
+    addLine("dashboard report opened");
+    return;
+  }
+
   if (cmd === "adminauth") {
     state.adminUnlocked = true;
     localStorage.setItem("spirenet_role", "admin");
 
     await saveAll();
-
     addLine("admin barrier unlocked");
     return;
   }
