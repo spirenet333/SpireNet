@@ -3,7 +3,7 @@ if (localStorage.getItem("spirenet_usb_verified") !== "true") {
 }
 
 const APP_NAME = "spirenet";
-const DB_NAME = "spirenet_cli_db_v10";
+const DB_NAME = "spirenet_cli_db_v11";
 const DB_VERSION = 1;
 
 const terminal = document.getElementById("terminal");
@@ -181,7 +181,6 @@ input.addEventListener("keydown", async (e) => {
     render();
   }
 });
-
 /* =========================
    node helpers
 ========================= */
@@ -267,6 +266,25 @@ function resolvePath(fromDirId, raw) {
 }
 
 /* =========================
+   business helpers
+========================= */
+function findCustomerByName(name) {
+  const target = lc(name || "").trim();
+  return state.customers.find(c => lc(c.name || "").trim() === target) || null;
+}
+
+function receiptsForJob(jobId) {
+  return state.receipts.filter(r => r.job === jobId);
+}
+
+function totalForJob(jobId) {
+  return receiptsForJob(jobId).reduce((sum, r) => {
+    const amt = parseFloat(r.amount);
+    return sum + (isNaN(amt) ? 0 : amt);
+  }, 0);
+}
+
+/* =========================
    render / print helpers
 ========================= */
 function renderTables(text) {
@@ -336,6 +354,73 @@ pre{white-space:pre-wrap;word-wrap:break-word;overflow-wrap:anywhere;font-family
 </body></html>`;
 }
 
+function buildPrintJobHtml(job) {
+  const customer = findCustomerByName(job.customer);
+  const linkedReceipts = receiptsForJob(job.id);
+  const total = totalForJob(job.id);
+
+  let body = `job packet
+
+job id: ${job.id}
+customer: ${job.customer || ""}
+address: ${job.address || ""}
+technician: ${job.technician || ""}
+status: ${job.status || ""}
+scheduled date: ${job.scheduled_date || ""}
+start time: ${job.start_time || ""}
+end time: ${job.end_time || ""}
+materials: ${job.materials || ""}
+labor: ${job.labor || ""}
+notes: ${job.notes || ""}
+
+`;
+
+  body += `customer record
+
+name: ${customer?.name || ""}
+phone: ${customer?.phone || ""}
+email: ${customer?.email || ""}
+address: ${customer?.address || ""}
+notes: ${customer?.notes || ""}
+
+`;
+
+  body += `linked receipts (${linkedReceipts.length})
+
+`;
+
+  if (linkedReceipts.length === 0) {
+    body += "(no linked receipts)\n\n";
+  } else {
+    linkedReceipts.forEach((r, i) => {
+      body += `receipt ${i + 1}
+id: ${r.id}
+vendor: ${r.vendor || ""}
+amount: ${r.amount || ""}
+date: ${r.date || ""}
+category: ${r.category || ""}
+notes: ${r.notes || ""}
+
+`;
+    });
+  }
+
+  body += `receipt total: $${total.toFixed(2)}
+`;
+
+  const safe = escapeHtml(body);
+
+  return `<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>print job</title>
+<style>
+body{font-family:menlo,monospace;font-size:12px;margin:40px;color:#000;background:#fff;}
+pre{white-space:pre-wrap;word-wrap:break-word;overflow-wrap:anywhere;font-family:menlo,monospace;font-size:12px;}
+</style>
+</head><body><pre>${safe}</pre>
+<script>setTimeout(()=>{window.print()},400)<\/script>
+</body></html>`;
+}
 /* =========================
    persistence
 ========================= */
@@ -490,6 +575,7 @@ const COMMANDS = [
   ["jobs", "list jobs"],
   ["viewjob <id>", "view job"],
   ["setjob <id> <field> <value>", "edit job"],
+  ["printjob <id>", "print job packet"],
   ["newreceipt", "create receipt"],
   ["receipts", "list receipts"],
   ["viewreceipt <id>", "view receipt"],
@@ -524,7 +610,6 @@ function handleEditLine(line) {
 /* =========================
    command handler
 ========================= */
-
 async function handleLine(line) {
 
   if (state.edit) {
@@ -590,9 +675,7 @@ async function handleLine(line) {
   }
 
   if (cmd === "cd") {
-
     const target = joinRest(args) || "/";
-
     const res = resolvePath(state.cwdId, target);
 
     if (!res.ok) {
@@ -615,7 +698,6 @@ async function handleLine(line) {
   }
 
   if (cmd === "mkdir") {
-
     const name = lc(args[0] || "");
 
     if (!safeName(name)) {
@@ -643,7 +725,6 @@ async function handleLine(line) {
   }
 
   if (cmd === "touch") {
-
     const name = lc(args[0] || "");
 
     if (!safeName(name)) {
@@ -673,7 +754,6 @@ async function handleLine(line) {
   }
 
   if (cmd === "cat") {
-
     const name = lc(args[0] || "");
     const file = childByName(state.cwdId, name);
 
@@ -687,7 +767,6 @@ async function handleLine(line) {
   }
 
   if (cmd === "write") {
-
     const name = lc(args[0] || "");
     const text = args.slice(1).join(" ");
 
@@ -706,7 +785,6 @@ async function handleLine(line) {
   }
 
   if (cmd === "append") {
-
     const name = lc(args[0] || "");
     const text = args.slice(1).join(" ");
 
@@ -717,7 +795,7 @@ async function handleLine(line) {
       return;
     }
 
-    file.content += "\n" + text;
+    file.content += (file.content ? "\n" : "") + text;
 
     await saveAll();
     addLine("appended");
@@ -725,7 +803,6 @@ async function handleLine(line) {
   }
 
   if (cmd === "open") {
-
     const name = lc(args[0] || "");
     const file = childByName(state.cwdId, name);
 
@@ -743,7 +820,6 @@ async function handleLine(line) {
   }
 
   if (cmd === "edit") {
-
     const name = lc(args[0] || "");
     const file = childByName(state.cwdId, name);
 
@@ -767,7 +843,6 @@ async function handleLine(line) {
   }
 
   if (cmd === "preview") {
-
     const name = lc(args[0] || "");
     const file = childByName(state.cwdId, name);
 
@@ -781,7 +856,6 @@ async function handleLine(line) {
   }
 
   if (cmd === "printpg") {
-
     const file = nodeById(state.activeFileId);
 
     if (!file) {
@@ -798,7 +872,6 @@ async function handleLine(line) {
   }
 
   if (cmd === "printdir") {
-
     const w = window.open("", "_blank");
     w.document.write(buildPrintDirHtml());
     w.document.close();
@@ -808,7 +881,6 @@ async function handleLine(line) {
   }
 
   if (cmd === "newcustomer") {
-
     const id = crypto.randomUUID().slice(0, 8);
 
     state.customers.push({
@@ -816,7 +888,8 @@ async function handleLine(line) {
       name: "",
       phone: "",
       email: "",
-      address: ""
+      address: "",
+      notes: ""
     });
 
     await saveAll();
@@ -825,7 +898,6 @@ async function handleLine(line) {
   }
 
   if (cmd === "customers") {
-
     if (!state.customers.length) {
       addLine("(none)");
       return;
@@ -839,7 +911,6 @@ async function handleLine(line) {
   }
 
   if (cmd === "viewcustomer") {
-
     const id = args[0];
     const c = state.customers.find(x => x.id === id);
 
@@ -853,11 +924,11 @@ async function handleLine(line) {
     addLine(`phone: ${c.phone}`);
     addLine(`email: ${c.email}`);
     addLine(`address: ${c.address}`);
+    addLine(`notes: ${c.notes}`);
     return;
   }
 
   if (cmd === "setcustomer") {
-
     const id = args[0];
     const field = args[1];
     const val = args.slice(2).join(" ");
@@ -877,14 +948,22 @@ async function handleLine(line) {
   }
 
   if (cmd === "newjob") {
-
     const id = crypto.randomUUID().slice(0, 8);
 
     state.jobs.push({
       id,
       customer: "",
       address: "",
-      notes: ""
+      technician: "",
+      status: "scheduled",
+      scheduled_date: "",
+      start_time: "",
+      end_time: "",
+      materials: "",
+      labor: "",
+      notes: "",
+      photos: [],
+      signature: ""
     });
 
     await saveAll();
@@ -893,21 +972,19 @@ async function handleLine(line) {
   }
 
   if (cmd === "jobs") {
-
     if (!state.jobs.length) {
       addLine("(none)");
       return;
     }
 
     state.jobs.forEach(j => {
-      addLine(`${j.id} ${j.customer}`);
+      addLine(`${j.id} ${j.customer} [${j.status}]`);
     });
 
     return;
   }
 
   if (cmd === "viewjob") {
-
     const id = args[0];
     const j = state.jobs.find(x => x.id === id);
 
@@ -919,12 +996,18 @@ async function handleLine(line) {
     addLine(`id: ${j.id}`);
     addLine(`customer: ${j.customer}`);
     addLine(`address: ${j.address}`);
+    addLine(`technician: ${j.technician}`);
+    addLine(`status: ${j.status}`);
+    addLine(`scheduled_date: ${j.scheduled_date}`);
+    addLine(`start_time: ${j.start_time}`);
+    addLine(`end_time: ${j.end_time}`);
+    addLine(`materials: ${j.materials}`);
+    addLine(`labor: ${j.labor}`);
     addLine(`notes: ${j.notes}`);
     return;
   }
 
   if (cmd === "setjob") {
-
     const id = args[0];
     const field = args[1];
     const val = args.slice(2).join(" ");
@@ -943,15 +1026,34 @@ async function handleLine(line) {
     return;
   }
 
-  if (cmd === "newreceipt") {
+  if (cmd === "printjob") {
+    const id = args[0];
+    const job = state.jobs.find(x => x.id === id);
 
+    if (!job) {
+      addLine("job not found");
+      return;
+    }
+
+    const w = window.open("", "_blank");
+    w.document.write(buildPrintJobHtml(job));
+    w.document.close();
+
+    addLine("job packet opened");
+    return;
+  }
+
+  if (cmd === "newreceipt") {
     const id = crypto.randomUUID().slice(0, 8);
 
     state.receipts.push({
       id,
       vendor: "",
       amount: 0,
-      job: ""
+      date: "",
+      job: "",
+      category: "",
+      notes: ""
     });
 
     await saveAll();
@@ -960,7 +1062,6 @@ async function handleLine(line) {
   }
 
   if (cmd === "receipts") {
-
     if (!state.receipts.length) {
       addLine("(none)");
       return;
@@ -974,7 +1075,6 @@ async function handleLine(line) {
   }
 
   if (cmd === "viewreceipt") {
-
     const id = args[0];
     const r = state.receipts.find(x => x.id === id);
 
@@ -986,12 +1086,14 @@ async function handleLine(line) {
     addLine(`id: ${r.id}`);
     addLine(`vendor: ${r.vendor}`);
     addLine(`amount: ${r.amount}`);
+    addLine(`date: ${r.date}`);
     addLine(`job: ${r.job}`);
+    addLine(`category: ${r.category}`);
+    addLine(`notes: ${r.notes}`);
     return;
   }
 
   if (cmd === "setreceipt") {
-
     const id = args[0];
     const field = args[1];
     const val = args.slice(2).join(" ");
@@ -1003,7 +1105,7 @@ async function handleLine(line) {
       return;
     }
 
-    if (field === "amount") r.amount = parseFloat(val);
+    if (field === "amount") r.amount = parseFloat(val) || 0;
     else r[field] = val;
 
     await saveAll();
@@ -1012,9 +1114,7 @@ async function handleLine(line) {
   }
 
   if (cmd === "jobreceipts") {
-
     const jobid = args[0];
-
     const rs = state.receipts.filter(r => r.job === jobid);
 
     if (!rs.length) {
@@ -1030,19 +1130,15 @@ async function handleLine(line) {
   }
 
   if (cmd === "jobtotal") {
-
     const jobid = args[0];
-
     const rs = state.receipts.filter(r => r.job === jobid);
-
-    const sum = rs.reduce((t, r) => t + (r.amount || 0), 0);
+    const sum = rs.reduce((t, r) => t + (parseFloat(r.amount) || 0), 0);
 
     addLine(`total: $${sum.toFixed(2)}`);
     return;
   }
 
   if (cmd === "adminauth") {
-
     state.adminUnlocked = true;
     localStorage.setItem("spirenet_role", "admin");
 
@@ -1058,9 +1154,7 @@ async function handleLine(line) {
 /* =========================
    boot
 ========================= */
-
 (async () => {
-
   await loadAll();
 
   addLine(`${APP_NAME} ready`);
@@ -1076,5 +1170,4 @@ async function handleLine(line) {
 
   setTimeout(focusInput, 120);
   setTimeout(focusInput, 400);
-
 })();
