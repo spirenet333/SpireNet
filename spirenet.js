@@ -3,7 +3,7 @@ if (localStorage.getItem("spirenet_usb_verified") !== "true") {
 }
 
 const APP_NAME = "spirenet";
-const DB_NAME = "spirenet_cli_db_v9";
+const DB_NAME = "spirenet_cli_db_v10";
 const DB_VERSION = 1;
 
 const terminal = document.getElementById("terminal");
@@ -14,154 +14,166 @@ const hint = document.getElementById("hint");
 /* =========================
    utils
 ========================= */
-
-function lc(s){
+function lc(s) {
   return (s ?? "").toString().toLowerCase();
 }
 
-function nowIso(){
+function nowIso() {
   return new Date().toISOString();
 }
 
-function safeName(s){
+function safeName(s) {
   return /^[a-z0-9_-]+$/.test(s);
 }
 
-function escapeHtml(s){
+function escapeHtml(s) {
   return (s ?? "").toString()
-    .replaceAll("&","&amp;")
-    .replaceAll("<","&lt;")
-    .replaceAll(">","&gt;");
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
 }
 
-function splitCmd(line){
-  const t=line.trim();
-  if(!t) return {cmd:"",args:[]};
-  const p=t.split(" ");
-  return {cmd:p[0],args:p.slice(1)};
+function splitCmd(line) {
+  const t = line.trim();
+  if (!t) return { cmd: "", args: [] };
+  const parts = t.split(" ");
+  return { cmd: parts[0], args: parts.slice(1) };
 }
 
-function joinRest(a){
-  return a.join(" ").trim();
+function joinRest(args) {
+  return args.join(" ").trim();
+}
+
+function normalizePath(raw) {
+  raw = lc(raw).replaceAll("\\", "/");
+  while (raw.includes("//")) raw = raw.replaceAll("//", "/");
+  if (raw.length > 1 && raw.endsWith("/")) raw = raw.slice(0, -1);
+  return raw;
 }
 
 /* =========================
    indexeddb
 ========================= */
+function openDB() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, DB_VERSION);
 
-function openDB(){
-  return new Promise((resolve,reject)=>{
-    const req=indexedDB.open(DB_NAME,DB_VERSION);
-
-    req.onupgradeneeded=()=>{
-      const db=req.result;
-      if(!db.objectStoreNames.contains("kv")){
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains("kv")) {
         db.createObjectStore("kv");
       }
     };
 
-    req.onsuccess=()=>resolve(req.result);
-    req.onerror=()=>reject(req.error);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
   });
 }
 
-async function kvGet(k){
-  const db=await openDB();
-  return new Promise((resolve,reject)=>{
-    const tx=db.transaction("kv","readonly");
-    const st=tx.objectStore("kv");
-    const r=st.get(k);
-    r.onsuccess=()=>resolve(r.result);
-    r.onerror=()=>reject(r.error);
+async function kvGet(key) {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction("kv", "readonly");
+    const st = tx.objectStore("kv");
+    const r = st.get(key);
+    r.onsuccess = () => resolve(r.result);
+    r.onerror = () => reject(r.error);
   });
 }
 
-async function kvSet(k,v){
-  const db=await openDB();
-  return new Promise((resolve,reject)=>{
-    const tx=db.transaction("kv","readwrite");
-    const st=tx.objectStore("kv");
-    const r=st.put(v,k);
-    r.onsuccess=()=>resolve(true);
-    r.onerror=()=>reject(r.error);
+async function kvSet(key, val) {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction("kv", "readwrite");
+    const st = tx.objectStore("kv");
+    const r = st.put(val, key);
+    r.onsuccess = () => resolve(true);
+    r.onerror = () => reject(r.error);
   });
 }
 
 /* =========================
    state
 ========================= */
+const state = {
+  transcript: [],
+  current: "",
 
-const state={
-  transcript:[],
-  current:"",
-  currentUser:"operator",
-  adminUnlocked:localStorage.getItem("spirenet_role")==="admin",
-  customers:[],
-  jobs:[],
-  receipts:[],
-  rootId:null,
-  cwdId:null,
-  cwdPath:"/spirenet",
-  activeFileId:null,
-  activeFileName:null,
-  nodes:[],
-  edit:null
+  currentUser: "operator",
+  adminUnlocked: localStorage.getItem("spirenet_role") === "admin",
+
+  customers: [],
+  jobs: [],
+  receipts: [],
+
+  rootId: null,
+  cwdId: null,
+  cwdPath: "/spirenet",
+
+  activeFileId: null,
+  activeFileName: null,
+
+  nodes: [],
+  edit: null
 };
 
 /* =========================
    terminal
 ========================= */
-
-function addLine(s){
+function addLine(s) {
   state.transcript.push(lc(s));
 }
 
-function addRawLine(s){
+function addRawLine(s) {
   state.transcript.push(s);
 }
 
-function addPromptEcho(s){
-  addRawLine("> "+lc(s));
+function addPromptEcho(s) {
+  addRawLine("> " + lc(s));
 }
 
-function render(){
-  terminal.textContent=
-    state.transcript.join("\n")+
-    "\n> "+state.current+"_";
-  terminal.scrollTop=terminal.scrollHeight;
+function render() {
+  terminal.textContent = state.transcript.join("\n") + "\n> " + state.current + "_";
+  terminal.scrollTop = terminal.scrollHeight;
 }
 
-function focusInput(){
+function focusInput() {
   input.focus();
-  setTimeout(()=>input.focus(),30);
-  setTimeout(()=>input.focus(),120);
-  setTimeout(()=>{
-    if(document.activeElement===input){
-      hint.style.display="none";
+  setTimeout(() => input.focus(), 30);
+  setTimeout(() => input.focus(), 120);
+  setTimeout(() => {
+    if (document.activeElement === input) {
+      hint.style.display = "none";
     }
-  },80);
+  }, 80);
 }
 
-tap.addEventListener("touchstart",focusInput,{passive:true});
-tap.addEventListener("pointerdown",focusInput,{passive:true});
-terminal.addEventListener("touchstart",focusInput,{passive:true});
-terminal.addEventListener("pointerdown",focusInput,{passive:true});
+tap.addEventListener("touchstart", focusInput, { passive: true });
+tap.addEventListener("pointerdown", focusInput, { passive: true });
+terminal.addEventListener("touchstart", focusInput, { passive: true });
+terminal.addEventListener("pointerdown", focusInput, { passive: true });
 
-input.addEventListener("input",()=>{
-  state.current=lc(input.value);
-  if(input.value!==state.current) input.value=state.current;
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) {
+    setTimeout(focusInput, 150);
+  }
+});
+
+input.addEventListener("input", () => {
+  state.current = lc(input.value);
+  if (input.value !== state.current) input.value = state.current;
   render();
 });
 
-input.addEventListener("keydown",async e=>{
-  if(e.key==="Enter"){
+input.addEventListener("keydown", async (e) => {
+  if (e.key === "Enter") {
     e.preventDefault();
 
-    const line=lc(state.current);
-    state.current="";
-    input.value="";
+    const line = lc(state.current);
+    state.current = "";
+    input.value = "";
 
-    if(line.trim().length){
+    if (line.trim().length) {
       addPromptEcho(line);
       await handleLine(line);
     }
@@ -173,192 +185,135 @@ input.addEventListener("keydown",async e=>{
 /* =========================
    node helpers
 ========================= */
-
-function nodeById(id){
-  return state.nodes.find(n=>n.id===id)||null;
+function nodeById(id) {
+  return state.nodes.find(n => n.id === id) || null;
 }
 
-function childrenOf(dirId){
+function childrenOf(dirId) {
   return state.nodes
-    .filter(n=>n.parentId===dirId)
-    .sort((a,b)=>{
-      if(a.type!==b.type) return a.type==="dir"?-1:1;
+    .filter(n => n.parentId === dirId)
+    .sort((a, b) => {
+      if (a.type !== b.type) return a.type === "dir" ? -1 : 1;
       return a.name.localeCompare(b.name);
     });
 }
 
-function childByName(dirId,name){
-  return state.nodes.find(
-    n=>n.parentId===dirId && n.name===name
-  )||null;
-}
-
-function pathOf(id){
-  const n=nodeById(id);
-  if(!n) return "/spirenet";
-  if(n.id===state.rootId) return "/spirenet";
-
-  const parts=[];
-  let cur=n;
-
-  while(cur && cur.parentId){
-    parts.push(cur.name);
-    cur=nodeById(cur.parentId);
-    if(cur && cur.id===state.rootId) break;
-  }
-
-  return "/spirenet/"+parts.reverse().join("/");
-}
-
-/* =========================
-   persistence
-========================= */
-
-async function saveAll(){
-  await kvSet("spirenet_state",{
-    currentUser:state.currentUser,
-    rootId:state.rootId,
-    cwdId:state.cwdId,
-    nodes:state.nodes,
-    customers:state.customers,
-    jobs:state.jobs,
-    receipts:state.receipts
+function visibleChildrenOf(dirId) {
+  return childrenOf(dirId).filter(n => {
+    if (pathOf(dirId) === "/spirenet" && n.name === "admin" && !state.adminUnlocked) {
+      return false;
+    }
+    return true;
   });
 }
 
-async function loadAll(){
-  const saved=await kvGet("spirenet_state");
-
-  if(saved && saved.nodes){
-    state.currentUser=saved.currentUser||"operator";
-    state.rootId=saved.rootId;
-    state.cwdId=saved.cwdId;
-    state.nodes=saved.nodes||[];
-    state.customers=saved.customers||[];
-    state.jobs=saved.jobs||[];
-    state.receipts=saved.receipts||[];
-    state.cwdPath=pathOf(state.cwdId||state.rootId);
-    return;
-  }
-
-  const root={
-    id:crypto.randomUUID(),
-    parentId:null,
-    name:"spirenet",
-    type:"dir",
-    content:null,
-    createdAt:nowIso()
-  };
-
-  const admin={
-    id:crypto.randomUUID(),
-    parentId:root.id,
-    name:"admin",
-    type:"dir",
-    content:null,
-    createdAt:nowIso()
-  };
-
-  const adminRole={
-    id:crypto.randomUUID(),
-    parentId:admin.id,
-    name:"admin_role",
-    type:"file",
-    content:localStorage.getItem("spirenet_role")||"operator",
-    createdAt:nowIso()
-  };
-
-  state.nodes=[root,admin,adminRole];
-
-  state.rootId=root.id;
-  state.cwdId=root.id;
-  state.cwdPath="/spirenet";
-
-  await saveAll();
+function childByName(dirId, name) {
+  return state.nodes.find(n => n.parentId === dirId && n.name === name) || null;
 }
 
-/* =========================
-   commands
-========================= */
+function pathOf(id) {
+  const n = nodeById(id);
+  if (!n) return "/spirenet";
+  if (n.id === state.rootId) return "/spirenet";
 
-const COMMANDS=[
-["help","list commands"],
-["cmmdhelp","describe commands"],
-["status","show status"],
-["whoami","show current user"],
-["pwd","show cwd"],
-["ls","list directory"],
-["cd <path>","change directory"],
-["mkdir <name>","create directory"],
-["touch <file>","create file"],
-["cat <file>","show file"],
-["write <file> <text>","overwrite file"],
-["append <file> <text>","append file"],
-["edit <file>","enter edit mode"],
-["done","exit edit mode"],
-["preview <file>","preview file"],
-["printpg","print active file"],
-["printdir","print entire directory"],
-["newcustomer","create customer"],
-["customers","list customers"],
-["viewcustomer <id>","view customer"],
-["setcustomer <id> <field> <value>","edit customer"],
-["newjob","create job"],
-["jobs","list jobs"],
-["viewjob <id>","view job"],
-["setjob <id> <field> <value>","edit job"],
-["newreceipt","create receipt"],
-["receipts","list receipts"],
-["viewreceipt <id>","view receipt"],
-["setreceipt <id> <field> <value>","edit receipt"],
-["jobreceipts <jobid>","receipts for job"],
-["jobtotal <jobid>","receipt totals"],
-["clear","clear terminal"]
-];
+  const parts = [];
+  let cur = n;
 
-/* =========================
-   edit mode
-========================= */
+  while (cur && cur.parentId) {
+    parts.push(cur.name);
+    cur = nodeById(cur.parentId);
+    if (cur && cur.id === state.rootId) break;
+  }
 
-function handleEditLine(line){
+  return "/spirenet/" + parts.reverse().join("/");
+}
 
-  const t=lc(line).trim();
+function resolvePath(fromDirId, raw) {
+  raw = normalizePath(raw);
 
-  if(t==="done"){
-    const file=nodeById(state.edit.fileId);
+  if (raw === "" || raw === ".") return { ok: true, id: fromDirId };
+  if (raw === "/" || raw === "/spirenet") return { ok: true, id: state.rootId };
 
-    if(file && file.type==="file"){
-      file.content=state.edit.buffer.join("\n");
-      saveAll();
-      addLine("saved");
+  let working = raw;
+  let startId = fromDirId;
+
+  if (working.startsWith("/spirenet")) {
+    startId = state.rootId;
+    working = working.slice("/spirenet".length);
+    if (working === "") return { ok: true, id: state.rootId };
+  } else if (working.startsWith("/")) {
+    startId = state.rootId;
+    working = working.slice(1);
+  }
+
+  const parts = working.split("/").filter(Boolean);
+  let curId = startId;
+
+  for (const part of parts) {
+    if (part === ".") continue;
+
+    if (part === "..") {
+      const cur = nodeById(curId);
+      if (cur && cur.parentId) curId = cur.parentId;
+      continue;
     }
 
-    state.edit=null;
-    return;
+    const child = childByName(curId, part);
+    if (!child) return { ok: false, err: `not found: ${raw}` };
+    curId = child.id;
   }
 
-  state.edit.buffer.push(line);
+  return { ok: true, id: curId };
 }
-function renderTables(text){
+
+/* =========================
+   render / print helpers
+========================= */
+function renderTables(text) {
   return (text ?? "").toString();
 }
 
-function buildPrintDirHtml(){
-  const kids=childrenOf(state.cwdId).filter(n=>n.type==="file");
+function buildPrintFileHtml(file) {
+  const body = `print page
 
-  let body=`directory print
+user: ${state.currentUser}
+cwd: ${state.cwdPath}
+file: ${file ? file.name : "(none)"}
+
+file view:
+${file ? renderTables(file.content || "") : ""}
+`;
+
+  const safe = escapeHtml(body);
+
+  return `<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>print</title>
+<style>
+body{font-family:menlo,monospace;font-size:12px;margin:40px;color:#000;background:#fff;}
+pre{white-space:pre-wrap;word-wrap:break-word;overflow-wrap:anywhere;font-family:menlo,monospace;font-size:12px;}
+</style>
+</head><body><pre>${safe}</pre>
+<script>setTimeout(()=>{window.print()},400)<\/script>
+</body></html>`;
+}
+
+function buildPrintDirHtml() {
+  const kids = childrenOf(state.cwdId).filter(n => n.type === "file");
+
+  let body = `directory print
 
 path: ${state.cwdPath}
 files: ${kids.length}
 
 `;
 
-  if(kids.length===0){
+  if (kids.length === 0) {
     body += "(no files in this directory)\n";
   } else {
-    kids.forEach((file,index)=>{
+    kids.forEach((file, index) => {
       body += `==================================================
-file ${index+1}: ${file.name}
+file ${index + 1}: ${file.name}
 ==================================================
 
 ${renderTables(file.content || "")}
@@ -367,629 +322,733 @@ ${renderTables(file.content || "")}
     });
   }
 
-  const safe=escapeHtml(body);
+  const safe = escapeHtml(body);
 
   return `<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>print directory</title>
 <style>
-body{
-  font-family:menlo,monospace;
-  font-size:12px;
-  margin:40px;
-  color:#000;
-  background:#fff;
-}
-pre{
-  white-space:pre-wrap;
-  word-wrap:break-word;
-  overflow-wrap:anywhere;
-  font-family:menlo,monospace;
-  font-size:12px;
-}
+body{font-family:menlo,monospace;font-size:12px;margin:40px;color:#000;background:#fff;}
+pre{white-space:pre-wrap;word-wrap:break-word;overflow-wrap:anywhere;font-family:menlo,monospace;font-size:12px;}
 </style>
-</head><body>
-<pre>${safe}</pre>
+</head><body><pre>${safe}</pre>
 <script>setTimeout(()=>{window.print()},400)<\/script>
 </body></html>`;
 }
 
 /* =========================
-   core command handler
+   persistence
+========================= */
+function syncAdminFiles() {
+  const adminDir = state.nodes.find(
+    n => n.parentId === state.rootId && n.name === "admin" && n.type === "dir"
+  );
+
+  if (!adminDir) return;
+
+  let roleFile = state.nodes.find(
+    n => n.parentId === adminDir.id && n.name === "admin_role" && n.type === "file"
+  );
+
+  if (!roleFile) {
+    roleFile = {
+      id: crypto.randomUUID(),
+      parentId: adminDir.id,
+      name: "admin_role",
+      type: "file",
+      content: "",
+      createdAt: nowIso()
+    };
+    state.nodes.push(roleFile);
+  }
+
+  roleFile.content = localStorage.getItem("spirenet_role") || "operator";
+}
+
+async function saveAll() {
+  syncAdminFiles();
+
+  await kvSet("spirenet_state", {
+    currentUser: state.currentUser,
+    rootId: state.rootId,
+    cwdId: state.cwdId,
+    activeFileId: state.activeFileId,
+    activeFileName: state.activeFileName,
+    nodes: state.nodes,
+    customers: state.customers,
+    jobs: state.jobs,
+    receipts: state.receipts
+  });
+}
+
+async function loadAll() {
+  const saved = await kvGet("spirenet_state");
+
+  if (saved && saved.nodes) {
+    state.currentUser = saved.currentUser || "operator";
+    state.rootId = saved.rootId;
+    state.cwdId = saved.cwdId;
+    state.activeFileId = saved.activeFileId ?? null;
+    state.activeFileName = saved.activeFileName ?? null;
+    state.nodes = saved.nodes || [];
+    state.customers = saved.customers || [];
+    state.jobs = saved.jobs || [];
+    state.receipts = saved.receipts || [];
+    state.cwdPath = pathOf(state.cwdId || state.rootId) || "/spirenet";
+    state.adminUnlocked = localStorage.getItem("spirenet_role") === "admin";
+    syncAdminFiles();
+    return;
+  }
+
+  const root = {
+    id: crypto.randomUUID(),
+    parentId: null,
+    name: "spirenet",
+    type: "dir",
+    content: null,
+    createdAt: nowIso()
+  };
+
+  const admin = {
+    id: crypto.randomUUID(),
+    parentId: root.id,
+    name: "admin",
+    type: "dir",
+    content: null,
+    createdAt: nowIso()
+  };
+
+  const net = {
+    id: crypto.randomUUID(),
+    parentId: root.id,
+    name: "net",
+    type: "dir",
+    content: null,
+    createdAt: nowIso()
+  };
+
+  const job = {
+    id: crypto.randomUUID(),
+    parentId: root.id,
+    name: "job",
+    type: "dir",
+    content: null,
+    createdAt: nowIso()
+  };
+
+  const adminRole = {
+    id: crypto.randomUUID(),
+    parentId: admin.id,
+    name: "admin_role",
+    type: "file",
+    content: localStorage.getItem("spirenet_role") || "operator",
+    createdAt: nowIso()
+  };
+
+  state.nodes = [root, admin, net, job, adminRole];
+  state.rootId = root.id;
+  state.cwdId = root.id;
+  state.cwdPath = "/spirenet";
+  state.activeFileId = null;
+  state.activeFileName = null;
+  state.customers = [];
+  state.jobs = [];
+  state.receipts = [];
+  state.adminUnlocked = localStorage.getItem("spirenet_role") === "admin";
+
+  syncAdminFiles();
+  await saveAll();
+}
+
+/* =========================
+   commands
+========================= */
+const COMMANDS = [
+  ["help", "list commands"],
+  ["cmmdhelp", "describe commands"],
+  ["status", "show status"],
+  ["whoami", "show current user"],
+  ["pwd", "show cwd"],
+  ["ls", "list directory"],
+  ["cd <path>", "change directory"],
+  ["mkdir <name>", "create directory"],
+  ["touch <file>", "create file"],
+  ["cat <file>", "show file"],
+  ["write <file> <text>", "overwrite file"],
+  ["append <file> <text>", "append file"],
+  ["open <file>", "set active file"],
+  ["edit <file>", "enter edit mode"],
+  ["done", "exit edit mode"],
+  ["preview <file>", "preview file"],
+  ["printpg", "print active file"],
+  ["printdir", "print entire directory"],
+  ["newcustomer", "create customer"],
+  ["customers", "list customers"],
+  ["viewcustomer <id>", "view customer"],
+  ["setcustomer <id> <field> <value>", "edit customer"],
+  ["newjob", "create job"],
+  ["jobs", "list jobs"],
+  ["viewjob <id>", "view job"],
+  ["setjob <id> <field> <value>", "edit job"],
+  ["newreceipt", "create receipt"],
+  ["receipts", "list receipts"],
+  ["viewreceipt <id>", "view receipt"],
+  ["setreceipt <id> <field> <value>", "edit receipt"],
+  ["jobreceipts <jobid>", "receipts for job"],
+  ["jobtotal <jobid>", "receipt totals"],
+  ["adminauth", "unlock admin barrier"],
+  ["clear", "clear terminal"]
+];
+
+/* =========================
+   edit mode
+========================= */
+function handleEditLine(line) {
+  const t = lc(line).trim();
+
+  if (t === "done") {
+    const file = nodeById(state.edit.fileId);
+
+    if (file && file.type === "file") {
+      file.content = state.edit.buffer.join("\n");
+      saveAll();
+      addLine("saved");
+    }
+
+    state.edit = null;
+    return;
+  }
+
+  state.edit.buffer.push(line);
+}
+/* =========================
+   command handler
 ========================= */
 
-async function handleLine(line){
+async function handleLine(line) {
 
-  if(state.edit){
+  if (state.edit) {
     handleEditLine(line);
     return;
   }
 
-  const {cmd,args}=splitCmd(line);
+  const { cmd, args } = splitCmd(line);
 
-  if(cmd==="help"){
+  if (!cmd) return;
+
+  if (cmd === "help") {
     addLine("commands:");
-    COMMANDS.forEach(c=>addLine(c[0]));
+    COMMANDS.forEach(c => addLine(c[0]));
     return;
   }
 
-  if(cmd==="cmmdhelp"){
+  if (cmd === "cmmdhelp") {
     addLine("command descriptions:");
-    COMMANDS.forEach(([k,d])=>addLine(`${k} : ${d}`));
+    COMMANDS.forEach(c => addLine(`${c[0]} : ${c[1]}`));
     return;
   }
 
-  if(cmd==="status"){
-    addLine("node authenticated");
-    addLine(`role: ${localStorage.getItem("spirenet_role") || "operator"}`);
+  if (cmd === "clear") {
+    state.transcript = [];
+    terminal.textContent = "";
+    return;
+  }
+
+  if (cmd === "status") {
+    addLine(`user: ${state.currentUser}`);
     addLine(`cwd: ${state.cwdPath}`);
+    addLine(`customers: ${state.customers.length}`);
+    addLine(`jobs: ${state.jobs.length}`);
+    addLine(`receipts: ${state.receipts.length}`);
     return;
   }
 
-  if(cmd==="whoami"){
+  if (cmd === "whoami") {
     addLine(state.currentUser);
     return;
   }
 
-  if(cmd==="pwd"){
+  if (cmd === "pwd") {
     addLine(state.cwdPath);
     return;
   }
 
-  if(cmd==="ls"){
-    const kids=childrenOf(state.cwdId);
+  if (cmd === "ls") {
+    const kids = visibleChildrenOf(state.cwdId);
 
-    if(kids.length===0){
+    if (!kids.length) {
       addLine("(empty)");
       return;
     }
 
-    kids.forEach(n=>{
-      if(n.type==="dir") addLine("dir "+n.name);
-      if(n.type==="file") addLine("file "+n.name);
+    kids.forEach(n => {
+      if (n.type === "dir") addLine(`dir ${n.name}`);
+      else addLine(`file ${n.name}`);
     });
 
     return;
   }
 
-  if(cmd==="cd"){
-    if(args.length<1){
-      addLine("error: missing path");
+  if (cmd === "cd") {
+
+    const target = joinRest(args) || "/";
+
+    const res = resolvePath(state.cwdId, target);
+
+    if (!res.ok) {
+      addLine(res.err);
       return;
     }
 
-    const name=args[0];
+    const node = nodeById(res.id);
 
-    if(name==="/"){
-      state.cwdId=state.rootId;
-      state.cwdPath="/spirenet";
-      await saveAll();
+    if (!node || node.type !== "dir") {
+      addLine("not a directory");
       return;
     }
 
-    if(name===".."){
-      const cur=nodeById(state.cwdId);
-      if(cur && cur.parentId){
-        state.cwdId=cur.parentId;
-        state.cwdPath=pathOf(cur.parentId);
-        await saveAll();
-      }
-      return;
-    }
+    state.cwdId = node.id;
+    state.cwdPath = pathOf(node.id);
 
-    const child=childByName(state.cwdId,name);
-
-    if(!child || child.type!=="dir"){
-      addLine("not found");
-      return;
-    }
-
-    if(pathOf(child.id)==="/spirenet/admin" && !state.adminUnlocked){
-      addLine("error: admin barrier locked");
-      return;
-    }
-
-    state.cwdId=child.id;
-    state.cwdPath=pathOf(child.id);
     await saveAll();
     return;
   }
 
-  if(cmd==="mkdir"){
-    if(args.length<1){
-      addLine("error: missing name");
+  if (cmd === "mkdir") {
+
+    const name = lc(args[0] || "");
+
+    if (!safeName(name)) {
+      addLine("invalid name");
       return;
     }
 
-    const name=args[0];
-
-    if(!safeName(name)){
-      addLine("error: invalid name");
-      return;
-    }
-
-    if(childByName(state.cwdId,name)){
-      addLine("error: already exists");
+    if (childByName(state.cwdId, name)) {
+      addLine("already exists");
       return;
     }
 
     state.nodes.push({
-      id:crypto.randomUUID(),
-      parentId:state.cwdId,
+      id: crypto.randomUUID(),
+      parentId: state.cwdId,
       name,
-      type:"dir",
-      content:null,
-      createdAt:nowIso()
+      type: "dir",
+      content: null,
+      createdAt: nowIso()
     });
 
     await saveAll();
-    addLine("ok");
+    addLine("directory created");
     return;
   }
 
-  if(cmd==="touch"){
-    if(args.length<1){
-      addLine("error: missing filename");
+  if (cmd === "touch") {
+
+    const name = lc(args[0] || "");
+
+    if (!safeName(name)) {
+      addLine("invalid name");
       return;
     }
 
-    const name=args[0];
-
-    if(childByName(state.cwdId,name)){
-      addLine("error: already exists");
+    if (childByName(state.cwdId, name)) {
+      addLine("already exists");
       return;
     }
 
-    state.nodes.push({
-      id:crypto.randomUUID(),
-      parentId:state.cwdId,
+    const file = {
+      id: crypto.randomUUID(),
+      parentId: state.cwdId,
       name,
-      type:"file",
-      content:"",
-      createdAt:nowIso()
-    });
+      type: "file",
+      content: "",
+      createdAt: nowIso()
+    };
+
+    state.nodes.push(file);
 
     await saveAll();
     addLine("file created");
     return;
   }
 
-  if(cmd==="cat"){
-    if(args.length<1){
-      addLine("missing filename");
-      return;
-    }
+  if (cmd === "cat") {
 
-    const f=childByName(state.cwdId,args[0]);
+    const name = lc(args[0] || "");
+    const file = childByName(state.cwdId, name);
 
-    if(!f || f.type!=="file"){
+    if (!file || file.type !== "file") {
       addLine("file not found");
       return;
     }
 
-    addLine(f.content || "");
+    addRawLine(file.content || "");
     return;
   }
 
-  if(cmd==="write"){
-    if(args.length<2){
-      addLine("usage: write <file> <text>");
-      return;
-    }
+  if (cmd === "write") {
 
-    const f=childByName(state.cwdId,args[0]);
+    const name = lc(args[0] || "");
+    const text = args.slice(1).join(" ");
 
-    if(!f || f.type!=="file"){
+    const file = childByName(state.cwdId, name);
+
+    if (!file || file.type !== "file") {
       addLine("file not found");
       return;
     }
 
-    f.content=args.slice(1).join(" ");
+    file.content = text;
+
     await saveAll();
     addLine("written");
     return;
   }
 
-  if(cmd==="append"){
-    if(args.length<2){
-      addLine("usage: append <file> <text>");
-      return;
-    }
+  if (cmd === "append") {
 
-    const f=childByName(state.cwdId,args[0]);
+    const name = lc(args[0] || "");
+    const text = args.slice(1).join(" ");
 
-    if(!f || f.type!=="file"){
+    const file = childByName(state.cwdId, name);
+
+    if (!file || file.type !== "file") {
       addLine("file not found");
       return;
     }
 
-    const text=args.slice(1).join(" ");
-    if(!f.content) f.content=text;
-    else f.content += "\n"+text;
+    file.content += "\n" + text;
 
     await saveAll();
     addLine("appended");
     return;
   }
 
-  if(cmd==="edit"){
-    if(args.length<1){
-      addLine("usage: edit <file>");
-      return;
-    }
+  if (cmd === "open") {
 
-    const name=args[0];
-    let f=childByName(state.cwdId,name);
+    const name = lc(args[0] || "");
+    const file = childByName(state.cwdId, name);
 
-    if(!f){
-      f={
-        id:crypto.randomUUID(),
-        parentId:state.cwdId,
-        name,
-        type:"file",
-        content:"",
-        createdAt:nowIso()
-      };
-      state.nodes.push(f);
-      await saveAll();
-    }
-
-    if(f.type!=="file"){
-      addLine("not a file");
-      return;
-    }
-
-    state.edit={
-      fileId:f.id,
-      buffer:(f.content || "").split("\n")
-    };
-
-    addLine("editing "+f.name);
-    addLine("type lines, then done");
-    return;
-  }
-
-  if(cmd==="preview"){
-    if(args.length<1){
-      addLine("usage: preview <file>");
-      return;
-    }
-
-    const f=childByName(state.cwdId,args[0]);
-
-    if(!f || f.type!=="file"){
+    if (!file || file.type !== "file") {
       addLine("file not found");
       return;
     }
 
-    addLine("preview:");
-    addLine(renderTables(f.content || ""));
-    return;
-  }
+    state.activeFileId = file.id;
+    state.activeFileName = file.name;
 
-  if(cmd==="printpg"){
-    const f=state.activeFileId ? nodeById(state.activeFileId) : null;
-    const body=`print page
-
-user: ${state.currentUser}
-cwd: ${state.cwdPath}
-file: ${(f && f.name) || "(none)"}
-
-file view:
-${(f && f.content) || ""}
-`;
-    const safe=escapeHtml(body);
-
-    const html=`<!doctype html><html><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>print</title>
-<style>
-body{font-family:menlo,monospace;font-size:12px;margin:40px;color:#000;background:#fff;}
-pre{white-space:pre-wrap;word-wrap:break-word;overflow-wrap:anywhere;font-family:menlo,monospace;font-size:12px;}
-</style></head><body><pre>${safe}</pre>
-<script>setTimeout(()=>{window.print()},400)<\/script>
-</body></html>`;
-
-    const blob=new Blob([html],{type:"text/html"});
-    const url=URL.createObjectURL(blob);
-    window.open(url,"_blank");
-    addLine("print ready");
-    return;
-  }
-
-  if(cmd==="printdir"){
-    const html=buildPrintDirHtml();
-    const blob=new Blob([html],{type:"text/html"});
-    const url=URL.createObjectURL(blob);
-    window.open(url,"_blank");
-    addLine("directory print ready");
-    return;
-  }
-
-  if(cmd==="newcustomer"){
-    const id=crypto.randomUUID().slice(0,8);
-
-    const c={
-      id,
-      name:"",
-      phone:"",
-      email:"",
-      address:"",
-      notes:"",
-      createdAt:nowIso()
-    };
-
-    state.customers.push(c);
     await saveAll();
-
-    addLine("customer created");
-    addLine("id: "+id);
+    addLine(`active file: ${file.name}`);
     return;
   }
 
-  if(cmd==="customers"){
-    if(state.customers.length===0){
-      addLine("no customers");
+  if (cmd === "edit") {
+
+    const name = lc(args[0] || "");
+    const file = childByName(state.cwdId, name);
+
+    if (!file || file.type !== "file") {
+      addLine("file not found");
       return;
     }
 
-    state.customers.forEach(c=>{
-      addLine(c.id+" "+(c.name || "(unnamed)"));
+    state.edit = {
+      fileId: file.id,
+      buffer: (file.content || "").split("\n")
+    };
+
+    addLine("edit mode (type 'done' to save)");
+    return;
+  }
+
+  if (cmd === "done") {
+    addLine("not in edit mode");
+    return;
+  }
+
+  if (cmd === "preview") {
+
+    const name = lc(args[0] || "");
+    const file = childByName(state.cwdId, name);
+
+    if (!file || file.type !== "file") {
+      addLine("file not found");
+      return;
+    }
+
+    addRawLine(file.content || "");
+    return;
+  }
+
+  if (cmd === "printpg") {
+
+    const file = nodeById(state.activeFileId);
+
+    if (!file) {
+      addLine("no active file");
+      return;
+    }
+
+    const w = window.open("", "_blank");
+    w.document.write(buildPrintFileHtml(file));
+    w.document.close();
+
+    addLine("print window opened");
+    return;
+  }
+
+  if (cmd === "printdir") {
+
+    const w = window.open("", "_blank");
+    w.document.write(buildPrintDirHtml());
+    w.document.close();
+
+    addLine("directory print opened");
+    return;
+  }
+
+  if (cmd === "newcustomer") {
+
+    const id = crypto.randomUUID().slice(0, 8);
+
+    state.customers.push({
+      id,
+      name: "",
+      phone: "",
+      email: "",
+      address: ""
+    });
+
+    await saveAll();
+    addLine(`customer created: ${id}`);
+    return;
+  }
+
+  if (cmd === "customers") {
+
+    if (!state.customers.length) {
+      addLine("(none)");
+      return;
+    }
+
+    state.customers.forEach(c => {
+      addLine(`${c.id} ${c.name}`);
     });
 
     return;
   }
 
-  if(cmd==="viewcustomer"){
-    if(args.length<1){
-      addLine("usage: viewcustomer <id>");
-      return;
-    }
+  if (cmd === "viewcustomer") {
 
-    const c=state.customers.find(x=>x.id===args[0]);
+    const id = args[0];
+    const c = state.customers.find(x => x.id === id);
 
-    if(!c){
+    if (!c) {
       addLine("customer not found");
       return;
     }
 
-    addLine("customer "+c.id);
-    addLine("name: "+c.name);
-    addLine("phone: "+c.phone);
-    addLine("email: "+c.email);
-    addLine("address: "+c.address);
-    addLine("notes: "+c.notes);
+    addLine(`id: ${c.id}`);
+    addLine(`name: ${c.name}`);
+    addLine(`phone: ${c.phone}`);
+    addLine(`email: ${c.email}`);
+    addLine(`address: ${c.address}`);
     return;
   }
 
-  if(cmd==="setcustomer"){
-    const id=args[0];
-    const field=args[1];
-    const value=args.slice(2).join(" ");
+  if (cmd === "setcustomer") {
 
-    const c=state.customers.find(x=>x.id===id);
+    const id = args[0];
+    const field = args[1];
+    const val = args.slice(2).join(" ");
 
-    if(!c){
+    const c = state.customers.find(x => x.id === id);
+
+    if (!c) {
       addLine("customer not found");
       return;
     }
 
-    c[field]=value;
+    c[field] = val;
+
     await saveAll();
-    addLine("updated");
+    addLine("customer updated");
     return;
   }
 
-  if(cmd==="newjob"){
-    const id=crypto.randomUUID().slice(0,8);
+  if (cmd === "newjob") {
 
-    const job={
+    const id = crypto.randomUUID().slice(0, 8);
+
+    state.jobs.push({
       id,
-      customer:"",
-      address:"",
-      technician:"",
-      status:"scheduled",
-      scheduled_date:"",
-      start_time:"",
-      end_time:"",
-      materials:"",
-      labor:"",
-      notes:"",
-      photos:[],
-      signature:"",
-      createdAt:nowIso()
-    };
+      customer: "",
+      address: "",
+      notes: ""
+    });
 
-    state.jobs.push(job);
     await saveAll();
-
-    addLine("job created");
-    addLine("id: "+id);
+    addLine(`job created: ${id}`);
     return;
   }
 
-  if(cmd==="jobs"){
-    if(state.jobs.length===0){
-      addLine("no jobs");
+  if (cmd === "jobs") {
+
+    if (!state.jobs.length) {
+      addLine("(none)");
       return;
     }
 
-    state.jobs.forEach(j=>{
-      addLine(j.id+" "+(j.customer || "(no customer)")+" ["+j.status+"]");
+    state.jobs.forEach(j => {
+      addLine(`${j.id} ${j.customer}`);
     });
 
     return;
   }
 
-  if(cmd==="viewjob"){
-    if(args.length<1){
-      addLine("usage: viewjob <id>");
-      return;
-    }
+  if (cmd === "viewjob") {
 
-    const j=state.jobs.find(x=>x.id===args[0]);
+    const id = args[0];
+    const j = state.jobs.find(x => x.id === id);
 
-    if(!j){
+    if (!j) {
       addLine("job not found");
       return;
     }
 
-    addLine("job "+j.id);
-    addLine("customer: "+j.customer);
-    addLine("address: "+j.address);
-    addLine("technician: "+j.technician);
-    addLine("status: "+j.status);
-    addLine("scheduled: "+j.scheduled_date);
-    addLine("start: "+j.start_time);
-    addLine("end: "+j.end_time);
-    addLine("materials: "+j.materials);
-    addLine("labor: "+j.labor);
-    addLine("notes: "+j.notes);
+    addLine(`id: ${j.id}`);
+    addLine(`customer: ${j.customer}`);
+    addLine(`address: ${j.address}`);
+    addLine(`notes: ${j.notes}`);
     return;
   }
 
-  if(cmd==="setjob"){
-    const id=args[0];
-    const field=args[1];
-    const value=args.slice(2).join(" ");
+  if (cmd === "setjob") {
 
-    const j=state.jobs.find(x=>x.id===id);
+    const id = args[0];
+    const field = args[1];
+    const val = args.slice(2).join(" ");
 
-    if(!j){
+    const j = state.jobs.find(x => x.id === id);
+
+    if (!j) {
       addLine("job not found");
       return;
     }
 
-    j[field]=value;
+    j[field] = val;
+
     await saveAll();
     addLine("job updated");
     return;
   }
 
-  if(cmd==="newreceipt"){
-    const id=crypto.randomUUID().slice(0,8);
+  if (cmd === "newreceipt") {
 
-    const r={
+    const id = crypto.randomUUID().slice(0, 8);
+
+    state.receipts.push({
       id,
-      vendor:"",
-      amount:"",
-      date:"",
-      job:"",
-      category:"",
-      notes:"",
-      createdAt:nowIso()
-    };
+      vendor: "",
+      amount: 0,
+      job: ""
+    });
 
-    state.receipts.push(r);
     await saveAll();
-
-    addLine("receipt created");
-    addLine("id: "+id);
+    addLine(`receipt created: ${id}`);
     return;
   }
 
-  if(cmd==="receipts"){
-    if(state.receipts.length===0){
-      addLine("no receipts");
+  if (cmd === "receipts") {
+
+    if (!state.receipts.length) {
+      addLine("(none)");
       return;
     }
 
-    state.receipts.forEach(r=>{
-      addLine(
-        r.id+" "+
-        (r.vendor || "(no vendor)")+
-        " $"+(r.amount || "0")+
-        " "+(r.job ? "[job "+r.job+"]" : "")
-      );
+    state.receipts.forEach(r => {
+      addLine(`${r.id} ${r.vendor} $${r.amount}`);
     });
 
     return;
   }
 
-  if(cmd==="viewreceipt"){
-    if(args.length<1){
-      addLine("usage: viewreceipt <id>");
-      return;
-    }
+  if (cmd === "viewreceipt") {
 
-    const r=state.receipts.find(x=>x.id===args[0]);
+    const id = args[0];
+    const r = state.receipts.find(x => x.id === id);
 
-    if(!r){
+    if (!r) {
       addLine("receipt not found");
       return;
     }
 
-    addLine("receipt "+r.id);
-    addLine("vendor: "+r.vendor);
-    addLine("amount: "+r.amount);
-    addLine("date: "+r.date);
-    addLine("job: "+r.job);
-    addLine("category: "+r.category);
-    addLine("notes: "+r.notes);
+    addLine(`id: ${r.id}`);
+    addLine(`vendor: ${r.vendor}`);
+    addLine(`amount: ${r.amount}`);
+    addLine(`job: ${r.job}`);
     return;
   }
 
-  if(cmd==="setreceipt"){
-    const id=args[0];
-    const field=args[1];
-    const value=args.slice(2).join(" ");
+  if (cmd === "setreceipt") {
 
-    const r=state.receipts.find(x=>x.id===id);
+    const id = args[0];
+    const field = args[1];
+    const val = args.slice(2).join(" ");
 
-    if(!r){
+    const r = state.receipts.find(x => x.id === id);
+
+    if (!r) {
       addLine("receipt not found");
       return;
     }
 
-    r[field]=value;
+    if (field === "amount") r.amount = parseFloat(val);
+    else r[field] = val;
+
     await saveAll();
     addLine("receipt updated");
     return;
   }
 
-  if(cmd==="jobreceipts"){
-    if(args.length<1){
-      addLine("usage: jobreceipts <jobid>");
+  if (cmd === "jobreceipts") {
+
+    const jobid = args[0];
+
+    const rs = state.receipts.filter(r => r.job === jobid);
+
+    if (!rs.length) {
+      addLine("(none)");
       return;
     }
 
-    const jobid=args[0];
-    const list=state.receipts.filter(r=>r.job===jobid);
-
-    if(list.length===0){
-      addLine("no receipts for job "+jobid);
-      return;
-    }
-
-    list.forEach(r=>{
-      addLine(r.id+" "+(r.vendor || "(no vendor)")+" $"+(r.amount || "0"));
+    rs.forEach(r => {
+      addLine(`${r.id} ${r.vendor} $${r.amount}`);
     });
 
     return;
   }
 
-  if(cmd==="jobtotal"){
-    if(args.length<1){
-      addLine("usage: jobtotal <jobid>");
-      return;
-    }
+  if (cmd === "jobtotal") {
 
-    const jobid=args[0];
-    const list=state.receipts.filter(r=>r.job===jobid);
+    const jobid = args[0];
 
-    if(list.length===0){
-      addLine("no receipts for job "+jobid);
-      return;
-    }
+    const rs = state.receipts.filter(r => r.job === jobid);
 
-    let total=0;
+    const sum = rs.reduce((t, r) => t + (r.amount || 0), 0);
 
-    list.forEach(r=>{
-      const amt=parseFloat(r.amount);
-      if(!isNaN(amt)) total+=amt;
-    });
+    addLine(`total: $${sum.toFixed(2)}`);
+    return;
+  }
 
-    addLine("job "+jobid+" receipt total: $"+total.toFixed(2));
+  if (cmd === "adminauth") {
+
+    state.adminUnlocked = true;
+    localStorage.setItem("spirenet_role", "admin");
+
+    await saveAll();
+
+    addLine("admin barrier unlocked");
     return;
   }
 
@@ -1000,20 +1059,22 @@ pre{white-space:pre-wrap;word-wrap:break-word;overflow-wrap:anywhere;font-family
    boot
 ========================= */
 
-(async function boot(){
+(async () => {
+
   await loadAll();
 
-  addLine(APP_NAME+" ready");
-  addLine(`role: ${localStorage.getItem("spirenet_role") || "operator"}`);
-  addLine('type "help" to list commands');
+  addLine(`${APP_NAME} ready`);
 
-  if(state.adminUnlocked){
+  if (state.adminUnlocked) {
+    addLine("role: admin");
     addLine("admin barrier unlocked");
   }
 
+  addLine(`type "help" to list commands`);
+
   render();
 
-  setTimeout(()=>{
-    try{input.focus();}catch(e){}
-  },700);
+  setTimeout(focusInput, 120);
+  setTimeout(focusInput, 400);
+
 })();
