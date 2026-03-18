@@ -1,1818 +1,321 @@
-import { loadDB, db } from "./src/core/db.js";
+// ===== INIT =====
 
-import * as customers from "./src/commands/customers.js";
-import * as jobs from "./src/commands/jobs.js";
-import * as receipts from "./src/commands/receipts.js";
-import * as invoices from "./src/commands/invoices.js";
-import * as payments from "./src/commands/payments.js";
-import * as ledger from "./src/commands/ledger.js";
-if (localStorage.getItem("spirenet_usb_verified") !== "true") {
-  window.location.href = "index.html";
+let db = JSON.parse(localStorage.getItem("spirenet_db") || "{}");
+
+if (!db.customers) db.customers = {};
+if (!db.jobs) db.jobs = {};
+if (!db.receipts) db.receipts = {};
+if (!db.invoices) db.invoices = {};
+if (!db.payments) db.payments = {};
+if (!db.expenses) db.expenses = [];
+
+function saveDB() {
+  localStorage.setItem("spirenet_db", JSON.stringify(db));
 }
 
-const APP_NAME = "spirenet";
-const DB_NAME = "spirenet_cli_db_v16";
-const DB_VERSION = 1;
+function id() {
+  return Math.random().toString(36).substring(2, 9);
+}
+
+// ===== UI =====
 
 const terminal = document.getElementById("terminal");
-const input = document.getElementById("hiddenInput");
-const tap = document.getElementById("tapCatcher");
-const hint = document.getElementById("hint");
+const input = document.getElementById("input");
 
-/* =========================
-   utils
-========================= */
-function lc(s) {
-  return (s ?? "").toString().toLowerCase();
-}
-
-function nowIso() {
-  return new Date().toISOString();
-}
-
-function safeName(s) {
-  return /^[a-z0-9_-]+$/.test(s);
-}
-
-function escapeHtml(s) {
-  return (s ?? "").toString()
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
-}
-
-function splitCmd(line) {
-  const t = line.trim();
-  if (!t) return { cmd: "", args: [] };
-  const parts = t.split(" ");
-  return { cmd: parts[0], args: parts.slice(1) };
-}
-
-function joinRest(args) {
-  return args.join(" ").trim();
-}
-
-function normalizePath(raw) {
-  raw = lc(raw).replaceAll("\\", "/");
-  while (raw.includes("//")) raw = raw.replaceAll("//", "/");
-  if (raw.length > 1 && raw.endsWith("/")) raw = raw.slice(0, -1);
-  return raw;
-}
-
-/* =========================
-   database
-========================= */
-function openDB() {
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, DB_VERSION);
-
-    req.onupgradeneeded = () => {
-      const db = req.result;
-      if (!db.objectStoreNames.contains("kv")) {
-        db.createObjectStore("kv");
-      }
-    };
-
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-}
-
-async function kvGet(key) {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction("kv", "readonly");
-    const st = tx.objectStore("kv");
-    const r = st.get(key);
-    r.onsuccess = () => resolve(r.result);
-    r.onerror = () => reject(r.error);
-  });
-}
-
-async function kvSet(key, val) {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction("kv", "readwrite");
-    const st = tx.objectStore("kv");
-    const r = st.put(val, key);
-    r.onsuccess = () => resolve(true);
-    r.onerror = () => reject(r.error);
-  });
-}
-
-/* =========================
-   state
-========================= */
-const state = {
-  transcript: [],
-  current: "",
-
-  currentUser: "operator",
-  adminUnlocked: localStorage.getItem("spirenet_role") === "admin",
-
-  customers: [],
-  jobs: [],
-  receipts: [],
-  invoices: [],
-  payments: [],
-  ledger: [],
-
-  businessplan: {
-    revenue_target: 0,
-    job_target: 0,
-    profit_target: 0,
-    marketing_budget: 0,
-    labor_budget: 0,
-    materials_budget: 0,
-    customer_growth: 0,
-    review_target: 0
-  },
-
-  rootId: null,
-  cwdId: null,
-  cwdPath: "/spirenet",
-
-  activeFileId: null,
-  activeFileName: null,
-
-  nodes: [],
-  edit: null
-};
-
-/* =========================
-   terminal + input
-========================= */
-function addLine(s) {
-  state.transcript.push(lc(s));
-}
-
-function addRawLine(s) {
-  state.transcript.push(s);
-}
-
-function addPromptEcho(s) {
-  addRawLine("> " + lc(s));
-}
-
-function render() {
-  terminal.textContent = state.transcript.join("\n") + "\n> " + state.current + "_";
+function print(text) {
+  terminal.textContent += text + "\n";
   terminal.scrollTop = terminal.scrollHeight;
 }
 
-function focusInput() {
-  input.focus();
-  setTimeout(() => input.focus(), 30);
-  setTimeout(() => input.focus(), 120);
-  setTimeout(() => {
-    if (document.activeElement === input) {
-      hint.style.display = "none";
-    }
-  }, 80);
+function clearTerminal() {
+  terminal.textContent = "";
 }
 
-tap.addEventListener("touchstart", focusInput, { passive: true });
-tap.addEventListener("pointerdown", focusInput, { passive: true });
-terminal.addEventListener("touchstart", focusInput, { passive: true });
-terminal.addEventListener("pointerdown", focusInput, { passive: true });
+// ===== FILE SYSTEM =====
 
-document.addEventListener("visibilitychange", () => {
-  if (!document.hidden) {
-    setTimeout(focusInput, 150);
-  }
-});
+let cwd = "/";
+let fs = { "/": {} };
 
-input.addEventListener("input", () => {
-  state.current = lc(input.value);
-  if (input.value !== state.current) input.value = state.current;
-  render();
-});
-
-input.addEventListener("keydown", async (e) => {
-  if (e.key === "Enter") {
-    e.preventDefault();
-
-    const line = lc(state.current);
-    state.current = "";
-    input.value = "";
-
-    if (line.trim().length) {
-      addPromptEcho(line);
-      await handleLine(line);
-    }
-
-    render();
-  }
-});
-/* =========================
-   filesystem helpers
-========================= */
-function nodeById(id) {
-  return state.nodes.find(n => n.id === id) || null;
+function getDir() {
+  return fs[cwd];
 }
 
-function childrenOf(dirId) {
-  return state.nodes
-    .filter(n => n.parentId === dirId)
-    .sort((a, b) => {
-      if (a.type !== b.type) return a.type === "dir" ? -1 : 1;
-      return a.name.localeCompare(b.name);
-    });
-}
+// ===== COMMAND =====
 
-function visibleChildrenOf(dirId) {
-  return childrenOf(dirId).filter(n => {
-    if (pathOf(dirId) === "/spirenet" && n.name === "admin" && !state.adminUnlocked) {
-      return false;
-    }
-    return true;
-  });
-}
+function handleCommand(raw) {
+  let input = raw.trim();
+  if (!input) return;
 
-function childByName(dirId, name) {
-  return state.nodes.find(n => n.parentId === dirId && n.name === name) || null;
-}
+  print("> " + input);
 
-function pathOf(id) {
-  const n = nodeById(id);
-  if (!n) return "/spirenet";
-  if (n.id === state.rootId) return "/spirenet";
+  let parts = input.toLowerCase().split(" ");
+  let cmd = parts[0];
+  let args = parts.slice(1);
 
-  const parts = [];
-  let cur = n;
-
-  while (cur && cur.parentId) {
-    parts.push(cur.name);
-    cur = nodeById(cur.parentId);
-    if (cur && cur.id === state.rootId) break;
-  }
-
-  return "/spirenet/" + parts.reverse().join("/");
-}
-
-function resolvePath(fromDirId, raw) {
-  raw = normalizePath(raw);
-
-  if (raw === "" || raw === ".") return { ok: true, id: fromDirId };
-  if (raw === "/" || raw === "/spirenet") return { ok: true, id: state.rootId };
-
-  let working = raw;
-  let startId = fromDirId;
-
-  if (working.startsWith("/spirenet")) {
-    startId = state.rootId;
-    working = working.slice("/spirenet".length);
-    if (working === "") return { ok: true, id: state.rootId };
-  } else if (working.startsWith("/")) {
-    startId = state.rootId;
-    working = working.slice(1);
-  }
-
-  const parts = working.split("/").filter(Boolean);
-  let curId = startId;
-
-  for (const part of parts) {
-    if (part === ".") continue;
-
-    if (part === "..") {
-      const cur = nodeById(curId);
-      if (cur && cur.parentId) curId = cur.parentId;
-      continue;
-    }
-
-    const child = childByName(curId, part);
-    if (!child) return { ok: false, err: `not found: ${raw}` };
-    curId = child.id;
-  }
-
-  return { ok: true, id: curId };
-}
-
-/* =========================
-   business helpers
-========================= */
-function findCustomerByName(name) {
-  const target = lc(name || "").trim();
-  return state.customers.find(c => lc(c.name || "").trim() === target) || null;
-}
-
-function receiptsForJob(jobId) {
-  return state.receipts.filter(r => r.job === jobId);
-}
-
-function totalForJob(jobId) {
-  return receiptsForJob(jobId).reduce((sum, r) => {
-    const amt = parseFloat(r.amount);
-    return sum + (isNaN(amt) ? 0 : amt);
-  }, 0);
-}
-
-function ledgerForJob(jobId) {
-  return state.ledger.filter(x => x.job === jobId);
-}
-
-function totalIncomeForJob(jobId) {
-  return ledgerForJob(jobId)
-    .filter(x => x.type === "income")
-    .reduce((sum, x) => sum + (parseFloat(x.amount) || 0), 0);
-}
-
-function totalExpenseForJob(jobId) {
-  return ledgerForJob(jobId)
-    .filter(x => x.type === "expense")
-    .reduce((sum, x) => sum + (parseFloat(x.amount) || 0), 0);
-}
-
-function profitForJob(jobId) {
-  return totalIncomeForJob(jobId) - totalExpenseForJob(jobId);
-}
-
-function addLedgerEntry(entry) {
-  state.ledger.push({
-    id: crypto.randomUUID().slice(0, 8),
-    date: entry.date || nowIso().slice(0, 10),
-    type: entry.type || "",
-    amount: parseFloat(entry.amount) || 0,
-    account: entry.account || "",
-    category: entry.category || "",
-    job: entry.job || "",
-    customer: entry.customer || "",
-    description: entry.description || "",
-    reference: entry.reference || "",
-    created_at: nowIso()
-  });
-}
-
-/* =========================
-   column formatting
-========================= */
-function formatListIntoColumns(items, rowsPerColumn = 10) {
-  if (!items || items.length === 0) return ["(none)"];
-
-  const cleanItems = items.map(x => (x ?? "").toString());
-  const longest = cleanItems.reduce((m, s) => Math.max(m, s.length), 0);
-  const colWidth = Math.max(18, Math.min(longest + 4, 42));
-
-  const screenWidth = window.innerWidth || 1024;
-
-  let colsPerPage = 1;
-  if (screenWidth >= 1400) colsPerPage = 3;
-  else if (screenWidth >= 900) colsPerPage = 2;
-  else colsPerPage = 1;
-
-  const itemsPerPage = rowsPerColumn * colsPerPage;
-  const lines = [];
-
-  for (let pageStart = 0; pageStart < cleanItems.length; pageStart += itemsPerPage) {
-    const pageItems = cleanItems.slice(pageStart, pageStart + itemsPerPage);
-
-    for (let row = 0; row < rowsPerColumn; row++) {
-      let line = "";
-
-      for (let col = 0; col < colsPerPage; col++) {
-        const index = row + (col * rowsPerColumn);
-
-        if (index >= pageItems.length) continue;
-
-        line += pageItems[index].padEnd(colWidth, " ");
-      }
-
-      if (line.trim().length > 0) {
-        lines.push(line.replace(/\s+$/, ""));
-      }
-    }
-
-    if (pageStart + itemsPerPage < cleanItems.length) {
-      lines.push("");
-    }
-  }
-
-  return lines;
-}
-
-function addColumnList(items, rowsPerColumn = 10) {
-  const lines = formatListIntoColumns(items, rowsPerColumn);
-  lines.forEach(line => addRawLine(line));
-}
-/* =========================
-   print / report builders
-========================= */
-function renderTables(text) {
-  return (text ?? "").toString();
-}
-
-function buildPrintFileHtml(file) {
-  const body = `print page
-
-user: ${state.currentUser}
-cwd: ${state.cwdPath}
-file: ${file ? file.name : "(none)"}
-
-file view:
-${file ? renderTables(file.content || "") : ""}
-`;
-
-  const safe = escapeHtml(body);
-
-  return `<!doctype html><html><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>print</title>
-<style>
-body{font-family:menlo,monospace;font-size:12px;margin:40px;color:#000;background:#fff;}
-pre{white-space:pre-wrap;word-wrap:break-word;overflow-wrap:anywhere;font-family:menlo,monospace;font-size:12px;}
-</style>
-</head><body><pre>${safe}</pre>
-<script>setTimeout(()=>{window.print()},400)<\/script>
-</body></html>`;
-}
-
-function buildPrintDirHtml() {
-  const kids = childrenOf(state.cwdId).filter(n => n.type === "file");
-
-  let body = `directory print
-
-path: ${state.cwdPath}
-files: ${kids.length}
-
-`;
-
-  if (kids.length === 0) {
-    body += "(no files in this directory)\n";
-  } else {
-    kids.forEach((file, index) => {
-      body += `==================================================
-file ${index + 1}: ${file.name}
-==================================================
-
-${renderTables(file.content || "")}
-
-`;
-    });
-  }
-
-  const safe = escapeHtml(body);
-
-  return `<!doctype html><html><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>print directory</title>
-<style>
-body{font-family:menlo,monospace;font-size:12px;margin:40px;color:#000;background:#fff;}
-pre{white-space:pre-wrap;word-wrap:break-word;overflow-wrap:anywhere;font-family:menlo,monospace;font-size:12px;}
-</style>
-</head><body><pre>${safe}</pre>
-<script>setTimeout(()=>{window.print()},400)<\/script>
-</body></html>`;
-}
-
-function buildPrintJobHtml(job) {
-  const customer = findCustomerByName(job.customer);
-  const linkedReceipts = receiptsForJob(job.id);
-  const linkedLedger = ledgerForJob(job.id);
-  const receiptTotal = totalForJob(job.id);
-  const incomeTotal = totalIncomeForJob(job.id);
-  const expenseTotal = totalExpenseForJob(job.id);
-  const jobProfit = profitForJob(job.id);
-
-  let body = `job packet
-
-job id: ${job.id}
-customer: ${job.customer || ""}
-address: ${job.address || ""}
-technician: ${job.technician || ""}
-status: ${job.status || ""}
-scheduled date: ${job.scheduled_date || ""}
-start time: ${job.start_time || ""}
-end time: ${job.end_time || ""}
-materials: ${job.materials || ""}
-labor: ${job.labor || ""}
-notes: ${job.notes || ""}
-
-`;
-
-  body += `customer record
-
-name: ${customer?.name || ""}
-phone: ${customer?.phone || ""}
-email: ${customer?.email || ""}
-address: ${customer?.address || ""}
-notes: ${customer?.notes || ""}
-
-`;
-
-  body += `linked receipts (${linkedReceipts.length})
-
-`;
-
-  if (linkedReceipts.length === 0) {
-    body += "(no linked receipts)\n\n";
-  } else {
-    linkedReceipts.forEach((r, i) => {
-      body += `receipt ${i + 1}
-id: ${r.id}
-vendor: ${r.vendor || ""}
-amount: ${r.amount || ""}
-date: ${r.date || ""}
-category: ${r.category || ""}
-notes: ${r.notes || ""}
-
-`;
-    });
-  }
-
-  body += `ledger entries (${linkedLedger.length})
-
-`;
-
-  if (linkedLedger.length === 0) {
-    body += "(no ledger entries)\n\n";
-  } else {
-    linkedLedger.forEach((l, i) => {
-      body += `entry ${i + 1}
-id: ${l.id}
-date: ${l.date || ""}
-type: ${l.type || ""}
-amount: ${l.amount || 0}
-account: ${l.account || ""}
-category: ${l.category || ""}
-description: ${l.description || ""}
-reference: ${l.reference || ""}
-
-`;
-    });
-  }
-
-  body += `receipt total: $${receiptTotal.toFixed(2)}
-income total: $${incomeTotal.toFixed(2)}
-expense total: $${expenseTotal.toFixed(2)}
-job profit: $${jobProfit.toFixed(2)}
-`;
-
-  const safe = escapeHtml(body);
-
-  return `<!doctype html><html><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>print job</title>
-<style>
-body{font-family:menlo,monospace;font-size:12px;margin:40px;color:#000;background:#fff;}
-pre{white-space:pre-wrap;word-wrap:break-word;overflow-wrap:anywhere;font-family:menlo,monospace;font-size:12px;}
-</style>
-</head><body><pre>${safe}</pre>
-<script>setTimeout(()=>{window.print()},400)<\/script>
-</body></html>`;
-}
-
-function buildFinancialReportHtml() {
-  const revenue = state.ledger
-    .filter(x => x.type === "income")
-    .reduce((t, x) => t + (parseFloat(x.amount) || 0), 0);
-
-  const materials = state.ledger
-    .filter(x => x.type === "expense" && lc(x.category) === "materials")
-    .reduce((t, x) => t + (parseFloat(x.amount) || 0), 0);
-
-  const labor = state.ledger
-    .filter(x => x.type === "expense" && lc(x.category) === "labor")
-    .reduce((t, x) => t + (parseFloat(x.amount) || 0), 0);
-
-  const marketing = state.ledger
-    .filter(x => x.type === "expense" && lc(x.category) === "marketing")
-    .reduce((t, x) => t + (parseFloat(x.amount) || 0), 0);
-
-  const otherExpenses = state.ledger
-    .filter(x => x.type === "expense" && !["materials", "labor", "marketing"].includes(lc(x.category)))
-    .reduce((t, x) => t + (parseFloat(x.amount) || 0), 0);
-
-  const totalExpenses = materials + labor + marketing + otherExpenses;
-  const profit = revenue - totalExpenses;
-  const margin = revenue ? ((profit / revenue) * 100).toFixed(1) : 0;
-
-  const body = `financial report
-
-revenue:         $${revenue.toFixed(2)}
-materials:       $${materials.toFixed(2)}
-labor:           $${labor.toFixed(2)}
-marketing:       $${marketing.toFixed(2)}
-other expenses:  $${otherExpenses.toFixed(2)}
-
---------------------------------
-
-total expenses:  $${totalExpenses.toFixed(2)}
-profit:          $${profit.toFixed(2)}
-profit margin:   ${margin}%
-`;
-
-  const safe = escapeHtml(body);
-
-  return `<!doctype html><html><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>financial report</title>
-<style>
-body{font-family:menlo,monospace;font-size:12px;margin:40px;color:#000;background:#fff;}
-pre{white-space:pre-wrap;font-family:menlo,monospace;font-size:12px;}
-</style>
-</head><body><pre>${safe}</pre>
-<script>setTimeout(()=>{window.print()},400)<\/script>
-</body></html>`;
-}
-
-function buildTaxReportHtml() {
-  const revenue = state.ledger
-    .filter(x => x.type === "income")
-    .reduce((t, x) => t + (parseFloat(x.amount) || 0), 0);
-
-  const deductibleExpenses = state.ledger
-    .filter(x => x.type === "expense")
-    .reduce((t, x) => t + (parseFloat(x.amount) || 0), 0);
-
-  const taxableProfit = revenue - deductibleExpenses;
-
-  const byCategory = {};
-  state.ledger
-    .filter(x => x.type === "expense")
-    .forEach(x => {
-      const key = lc(x.category || "uncategorized");
-      byCategory[key] = (byCategory[key] || 0) + (parseFloat(x.amount) || 0);
-    });
-
-  let categoryLines = "";
-  Object.keys(byCategory).sort().forEach(key => {
-    categoryLines += `${key}: ${byCategory[key].toFixed(2)}\n`;
-  });
-
-  const body = `tax report
-
-income from ledger:      $${revenue.toFixed(2)}
-deductible expenses:     $${deductibleExpenses.toFixed(2)}
-taxable profit:          $${taxableProfit.toFixed(2)}
-
-expense categories
-${categoryLines || "(none)\n"}
-`;
-
-  const safe = escapeHtml(body);
-
-  return `<!doctype html><html><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>tax report</title>
-<style>
-body{font-family:menlo,monospace;font-size:12px;margin:40px;color:#000;background:#fff;}
-pre{white-space:pre-wrap;font-family:menlo,monospace;font-size:12px;}
-</style>
-</head><body><pre>${safe}</pre>
-<script>setTimeout(()=>{window.print()},400)<\/script>
-</body></html>`;
-}
-
-function buildDashboardReportHtml() {
-  const plan = state.businessplan;
-
-  const revenue = state.ledger
-    .filter(x => x.type === "income")
-    .reduce((t, x) => t + (parseFloat(x.amount) || 0), 0);
-
-  const expenses = state.ledger
-    .filter(x => x.type === "expense")
-    .reduce((t, x) => t + (parseFloat(x.amount) || 0), 0);
-
-  const profit = revenue - expenses;
-  const jobs = state.jobs.length;
-  const customers = state.customers.length;
-
-  const revenuePct = plan.revenue_target ? ((revenue / plan.revenue_target) * 100).toFixed(1) : 0;
-  const jobsPct = plan.job_target ? ((jobs / plan.job_target) * 100).toFixed(1) : 0;
-  const customerPct = plan.customer_growth ? ((customers / plan.customer_growth) * 100).toFixed(1) : 0;
-  const profitPct = plan.profit_target ? ((profit / plan.profit_target) * 100).toFixed(1) : 0;
-
-  const body = `executive dashboard
-
-revenue:            $${revenue.toFixed(2)}
-revenue target:     $${plan.revenue_target}
-progress:           ${revenuePct}%
-
-profit:             $${profit.toFixed(2)}
-profit target:      $${plan.profit_target}
-progress:           ${profitPct}%
-
-jobs:               ${jobs}
-job target:         ${plan.job_target}
-progress:           ${jobsPct}%
-
-customers:          ${customers}
-customer target:    ${plan.customer_growth}
-progress:           ${customerPct}%
-
-budgets
-
-marketing budget:   $${plan.marketing_budget}
-labor budget:       $${plan.labor_budget}
-materials budget:   $${plan.materials_budget}
-`;
-
-  const safe = escapeHtml(body);
-
-  return `<!doctype html><html><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>dashboard report</title>
-<style>
-body{font-family:menlo,monospace;font-size:12px;margin:40px;color:#000;background:#fff;}
-pre{white-space:pre-wrap;font-family:menlo,monospace;font-size:12px;}
-</style>
-</head><body><pre>${safe}</pre>
-<script>setTimeout(()=>{window.print()},400)<\/script>
-</body></html>`;
-}
-/* =========================
-   persistence
-========================= */
-function syncAdminFiles() {
-  const adminDir = state.nodes.find(
-    n => n.parentId === state.rootId && n.name === "admin" && n.type === "dir"
-  );
-
-  if (!adminDir) return;
-
-  let roleFile = state.nodes.find(
-    n => n.parentId === adminDir.id && n.name === "admin_role" && n.type === "file"
-  );
-
-  if (!roleFile) {
-    roleFile = {
-      id: crypto.randomUUID(),
-      parentId: adminDir.id,
-      name: "admin_role",
-      type: "file",
-      content: "",
-      createdAt: nowIso()
-    };
-    state.nodes.push(roleFile);
-  }
-
-  roleFile.content = localStorage.getItem("spirenet_role") || "operator";
-}
-
-async function saveAll() {
-  syncAdminFiles();
-
-  await kvSet("spirenet_state", {
-    currentUser: state.currentUser,
-    rootId: state.rootId,
-    cwdId: state.cwdId,
-    activeFileId: state.activeFileId,
-    activeFileName: state.activeFileName,
-    nodes: state.nodes,
-    customers: state.customers,
-    jobs: state.jobs,
-    receipts: state.receipts,
-    invoices: state.invoices,
-    payments: state.payments,
-    ledger: state.ledger,
-    businessplan: state.businessplan
-  });
-}
-
-async function loadAll() {
-  const saved = await kvGet("spirenet_state");
-
-  if (saved && saved.nodes) {
-    state.currentUser = saved.currentUser || "operator";
-    state.rootId = saved.rootId;
-    state.cwdId = saved.cwdId;
-    state.activeFileId = saved.activeFileId ?? null;
-    state.activeFileName = saved.activeFileName ?? null;
-    state.nodes = saved.nodes || [];
-    state.customers = saved.customers || [];
-    state.jobs = saved.jobs || [];
-    state.receipts = saved.receipts || [];
-    state.invoices = saved.invoices || [];
-    state.payments = saved.payments || [];
-    state.ledger = saved.ledger || [];
-    state.businessplan = saved.businessplan || state.businessplan;
-    state.cwdPath = pathOf(state.cwdId || state.rootId) || "/spirenet";
-    state.adminUnlocked = localStorage.getItem("spirenet_role") === "admin";
-    syncAdminFiles();
-    return;
-  }
-
-  const root = {
-    id: crypto.randomUUID(),
-    parentId: null,
-    name: "spirenet",
-    type: "dir",
-    content: null,
-    createdAt: nowIso()
-  };
-
-  const admin = {
-    id: crypto.randomUUID(),
-    parentId: root.id,
-    name: "admin",
-    type: "dir",
-    content: null,
-    createdAt: nowIso()
-  };
-
-  const adminRole = {
-    id: crypto.randomUUID(),
-    parentId: admin.id,
-    name: "admin_role",
-    type: "file",
-    content: localStorage.getItem("spirenet_role") || "operator",
-    createdAt: nowIso()
-  };
-
-  state.nodes = [root, admin, adminRole];
-  state.rootId = root.id;
-  state.cwdId = root.id;
-  state.cwdPath = "/spirenet";
-  state.activeFileId = null;
-  state.activeFileName = null;
-  state.customers = [];
-  state.jobs = [];
-  state.receipts = [];
-  state.invoices = [];
-  state.payments = [];
-  state.ledger = [];
-  state.adminUnlocked = localStorage.getItem("spirenet_role") === "admin";
-
-  syncAdminFiles();
-  await saveAll();
-}
-
-/* =========================
-   command list + edit mode
-========================= */
-const COMMANDS = [
-  ["help", "list commands"],
-  ["cmmdhelp", "describe commands"],
-  ["status", "show status"],
-  ["whoami", "show current user"],
-  ["pwd", "show cwd"],
-  ["ls", "list directory"],
-  ["cd <path>", "change directory"],
-  ["mkdir <name>", "create directory"],
-  ["touch <file>", "create file"],
-  ["cat <file>", "show file"],
-  ["write <file> <text>", "overwrite file"],
-  ["append <file> <text>", "append file"],
-  ["open <file>", "set active file"],
-  ["edit <file>", "enter edit mode"],
-  ["done", "exit edit mode"],
-  ["preview <file>", "preview file"],
-  ["printpg", "print active file"],
-  ["printdir", "print entire directory"],
-
-  ["newcustomer", "create customer"],
-  ["customers", "list customers"],
-  ["viewcustomer <id>", "view customer"],
-  ["setcustomer <id> <field> <value>", "edit customer"],
-
-  ["newjob", "create job"],
-  ["jobs", "list jobs"],
-  ["viewjob <id>", "view job"],
-  ["setjob <id> <field> <value>", "edit job"],
-  ["printjob <id>", "print job packet"],
-
-  ["newreceipt", "create receipt"],
-  ["receipts", "list receipts"],
-  ["viewreceipt <id>", "view receipt"],
-  ["setreceipt <id> <field> <value>", "edit receipt"],
-  ["jobreceipts <jobid>", "receipts for job"],
-  ["jobtotal <jobid>", "receipt totals"],
-
-  ["newinvoice", "create invoice"],
-  ["invoices", "list invoices"],
-  ["viewinvoice <id>", "view invoice"],
-  ["setinvoice <id> <field> <value>", "edit invoice"],
-
-  ["newpayment", "record payment"],
-  ["payments", "list payments"],
-  ["viewpayment <id>", "view payment"],
-
-  ["ledger", "list ledger entries"],
-  ["jobledger <jobid>", "ledger entries for a job"],
-  ["profit <jobid>", "show job profit"],
-
-  ["businessplan", "view business plan"],
-  ["setplan <field> <value>", "set business plan target"],
-  ["scorecard", "compare performance vs plan"],
-
-  ["report financial", "financial statement report"],
-  ["report tax", "tax summary report"],
-  ["report dashboard", "executive business dashboard"],
-
-  ["adminauth", "unlock admin barrier"],
-  ["clear", "clear terminal"]
-];
-
-function handleEditLine(line) {
-  const t = lc(line).trim();
-
-  if (t === "done") {
-    const file = nodeById(state.edit.fileId);
-
-    if (file && file.type === "file") {
-      file.content = state.edit.buffer.join("\n");
-      saveAll();
-      addLine("saved");
-    }
-
-    state.edit = null;
-    return;
-  }
-
-  state.edit.buffer.push(line);
-}
-/* =========================
-   command handler
-========================= */
-async function handleLine(line) {
-
-  if (state.edit) {
-    handleEditLine(line);
-    return;
-  }
-
-  const { cmd, args } = splitCmd(line);
-
-  if (!cmd) return;
+  // ===== BASIC =====
 
   if (cmd === "help") {
-    addLine("commands:");
-    addColumnList(COMMANDS.map(c => c[0]), 10);
-    return;
+    print("type cmdhelp");
   }
 
-  if (cmd === "cmmdhelp") {
-    addLine("command descriptions:");
-    COMMANDS.forEach(c => addLine(`${c[0]} : ${c[1]}`));
-    return;
+  else if (cmd === "cmdhelp") {
+    print("system:");
+    print("help cmdhelp clear status whoami printpg");
+
+    print("files:");
+    print("ls mkdir cd touch cat write append");
+
+    print("business:");
+    print("newcustomer setcustomer viewcustomer");
+    print("newjob setjob viewjob");
+    print("newreceipt setreceipt");
+    print("newinvoice setinvoice");
+    print("newpayment setpayment");
+    print("newexpense setexpense expenses");
+    print("ledger");
   }
 
-  if (cmd === "clear") {
-    state.transcript = [];
-    terminal.textContent = "";
-    return;
+  else if (cmd === "clear") {
+    clearTerminal();
   }
 
-  if (cmd === "status") {
-    addLine(`user: ${state.currentUser}`);
-    addLine(`cwd: ${state.cwdPath}`);
-    addLine(`customers: ${state.customers.length}`);
-    addLine(`jobs: ${state.jobs.length}`);
-    addLine(`receipts: ${state.receipts.length}`);
-    addLine(`invoices: ${state.invoices.length}`);
-    addLine(`payments: ${state.payments.length}`);
-    addLine(`ledger: ${state.ledger.length}`);
-    return;
+  else if (cmd === "status") {
+    print("spirenet ready");
   }
 
-  if (cmd === "whoami") {
-    addLine(state.currentUser);
-    return;
+  else if (cmd === "whoami") {
+    print("admin");
   }
 
-  if (cmd === "pwd") {
-    addLine(state.cwdPath);
-    return;
-  }
+  // ===== FILE SYSTEM =====
 
-  if (cmd === "ls") {
-    const kids = visibleChildrenOf(state.cwdId);
-
-    if (!kids.length) {
-      addLine("(empty)");
-      return;
-    }
-
-    const items = kids.map(n => n.type === "dir" ? `dir ${n.name}` : `file ${n.name}`);
-    addColumnList(items, 10);
-    return;
-  }
-
-  if (cmd === "cd") {
-    const target = joinRest(args) || "/";
-    const res = resolvePath(state.cwdId, target);
-
-    if (!res.ok) {
-      addLine(res.err);
-      return;
-    }
-
-    const node = nodeById(res.id);
-
-    if (!node || node.type !== "dir") {
-      addLine("not a directory");
-      return;
-    }
-
-    state.cwdId = node.id;
-    state.cwdPath = pathOf(node.id);
-
-    await saveAll();
-    return;
-  }
-
-  if (cmd === "mkdir") {
-    const name = lc(args[0] || "");
-
-    if (!safeName(name)) {
-      addLine("invalid name");
-      return;
-    }
-
-    if (childByName(state.cwdId, name)) {
-      addLine("already exists");
-      return;
-    }
-
-    state.nodes.push({
-      id: crypto.randomUUID(),
-      parentId: state.cwdId,
-      name,
-      type: "dir",
-      content: null,
-      createdAt: nowIso()
+  else if (cmd === "ls") {
+    let d = getDir();
+    Object.keys(d).forEach(k => {
+      if (typeof d[k] === "object") print("dir " + k);
+      else print("file " + k);
     });
-
-    await saveAll();
-    addLine("directory created");
-    return;
   }
 
-  if (cmd === "touch") {
-    const name = lc(args[0] || "");
-
-    if (!safeName(name)) {
-      addLine("invalid name");
-      return;
-    }
-
-    if (childByName(state.cwdId, name)) {
-      addLine("already exists");
-      return;
-    }
-
-    const file = {
-      id: crypto.randomUUID(),
-      parentId: state.cwdId,
-      name,
-      type: "file",
-      content: "",
-      createdAt: nowIso()
-    };
-
-    state.nodes.push(file);
-
-    await saveAll();
-    addLine("file created");
-    return;
+  else if (cmd === "mkdir") {
+    let name = args[0];
+    getDir()[name] = {};
+    print("dir created");
   }
 
-  if (cmd === "cat") {
-    const name = lc(args[0] || "");
-    const file = childByName(state.cwdId, name);
-
-    if (!file || file.type !== "file") {
-      addLine("file not found");
-      return;
-    }
-
-    addRawLine(file.content || "");
-    return;
+  else if (cmd === "cd") {
+    let name = args[0];
+    if (name === "/") cwd = "/";
+    else if (fs[cwd][name]) cwd = name;
+    print("cwd: " + cwd);
   }
 
-  if (cmd === "write") {
-    const name = lc(args[0] || "");
-    const text = args.slice(1).join(" ");
-
-    const file = childByName(state.cwdId, name);
-
-    if (!file || file.type !== "file") {
-      addLine("file not found");
-      return;
-    }
-
-    file.content = text;
-
-    await saveAll();
-    addLine("written");
-    return;
+  else if (cmd === "touch") {
+    let name = args[0];
+    getDir()[name] = "";
+    print("file created");
   }
 
-  if (cmd === "append") {
-    const name = lc(args[0] || "");
-    const text = args.slice(1).join(" ");
-
-    const file = childByName(state.cwdId, name);
-
-    if (!file || file.type !== "file") {
-      addLine("file not found");
-      return;
-    }
-
-    file.content += (file.content ? "\n" : "") + text;
-
-    await saveAll();
-    addLine("appended");
-    return;
+  else if (cmd === "cat") {
+    let name = args[0];
+    print(getDir()[name] || "");
   }
 
-  if (cmd === "open") {
-    const name = lc(args[0] || "");
-    const file = childByName(state.cwdId, name);
-
-    if (!file || file.type !== "file") {
-      addLine("file not found");
-      return;
-    }
-
-    state.activeFileId = file.id;
-    state.activeFileName = file.name;
-
-    await saveAll();
-    addLine(`active file: ${file.name}`);
-    return;
+  else if (cmd === "write") {
+    let name = args[0];
+    let text = args.slice(1).join(" ");
+    getDir()[name] = text;
+    print("written");
   }
 
-  if (cmd === "edit") {
-    const name = lc(args[0] || "");
-    const file = childByName(state.cwdId, name);
-
-    if (!file || file.type !== "file") {
-      addLine("file not found");
-      return;
-    }
-
-    state.edit = {
-      fileId: file.id,
-      buffer: (file.content || "").split("\n")
-    };
-
-    addLine("edit mode (type 'done' to save)");
-    return;
+  else if (cmd === "append") {
+    let name = args[0];
+    let text = args.slice(1).join(" ");
+    getDir()[name] += "\n" + text;
+    print("appended");
   }
 
-  if (cmd === "done") {
-    addLine("not in edit mode");
-    return;
+  // ===== CUSTOMERS =====
+
+  else if (cmd === "newcustomer") {
+    let i = id();
+    db.customers[i] = { id: i, name: "", phone: "", email: "" };
+    saveDB();
+    print("customer " + i);
   }
 
-  if (cmd === "preview") {
-    const name = lc(args[0] || "");
-    const file = childByName(state.cwdId, name);
-
-    if (!file || file.type !== "file") {
-      addLine("file not found");
-      return;
-    }
-
-    addRawLine(file.content || "");
-    return;
+  else if (cmd === "setcustomer") {
+    let [i, field, ...v] = args;
+    if (!db.customers[i]) return print("not found");
+    db.customers[i][field] = v.join(" ");
+    saveDB();
+    print("updated");
   }
 
-  if (cmd === "printpg") {
-    const file = nodeById(state.activeFileId);
-
-    if (!file) {
-      addLine("no active file");
-      return;
-    }
-
-    const w = window.open("", "_blank");
-    w.document.write(buildPrintFileHtml(file));
-    w.document.close();
-
-    addLine("print window opened");
-    return;
+  else if (cmd === "viewcustomer") {
+    let c = db.customers[args[0]];
+    print(JSON.stringify(c, null, 2));
   }
 
-  if (cmd === "printdir") {
-    const w = window.open("", "_blank");
-    w.document.write(buildPrintDirHtml());
-    w.document.close();
+  // ===== JOBS =====
 
-    addLine("directory print opened");
-    return;
+  else if (cmd === "newjob") {
+    let i = id();
+    db.jobs[i] = { id: i, customer: "", status: "open" };
+    saveDB();
+    print("job " + i);
   }
 
-  if (cmd === "newcustomer") {
-    const id = crypto.randomUUID().slice(0, 8);
+  else if (cmd === "setjob") {
+    let [i, field, ...v] = args;
+    if (!db.jobs[i]) return print("not found");
+    db.jobs[i][field] = v.join(" ");
+    saveDB();
+    print("updated");
+  }
 
-    state.customers.push({
-      id,
-      name: "",
-      phone: "",
-      email: "",
-      address: "",
-      notes: ""
+  else if (cmd === "viewjob") {
+    print(JSON.stringify(db.jobs[args[0]], null, 2));
+  }
+
+  // ===== RECEIPTS =====
+
+  else if (cmd === "newreceipt") {
+    let i = id();
+    db.receipts[i] = { id: i, amount: 0, category: "" };
+    saveDB();
+    print("receipt " + i);
+  }
+
+  else if (cmd === "setreceipt") {
+    let [i, field, ...v] = args;
+    if (!db.receipts[i]) return print("not found");
+    db.receipts[i][field] = v.join(" ");
+    saveDB();
+    print("updated");
+  }
+
+  // ===== INVOICES =====
+
+  else if (cmd === "newinvoice") {
+    let i = id();
+    db.invoices[i] = { id: i, amount: 0, paid: false };
+    saveDB();
+    print("invoice " + i);
+  }
+
+  else if (cmd === "setinvoice") {
+    let [i, field, ...v] = args;
+    if (!db.invoices[i]) return print("not found");
+
+    if (field === "paid") db.invoices[i].paid = v[0] === "true";
+    else db.invoices[i][field] = v.join(" ");
+
+    saveDB();
+    print("updated");
+  }
+
+  // ===== PAYMENTS =====
+
+  else if (cmd === "newpayment") {
+    let i = id();
+    db.payments[i] = { id: i, invoice: "", amount: 0 };
+    saveDB();
+    print("payment " + i);
+  }
+
+  else if (cmd === "setpayment") {
+    let [i, field, ...v] = args;
+    if (!db.payments[i]) return print("not found");
+
+    db.payments[i][field] = v.join(" ");
+
+    let inv = db.invoices[v[0]];
+    if (inv) inv.paid = true;
+
+    saveDB();
+    print("updated");
+  }
+
+  // ===== EXPENSES =====
+
+  else if (cmd === "newexpense") {
+    let i = id();
+    db.expenses.push({ id: i, amount: 0, category: "" });
+    saveDB();
+    print("expense " + i);
+  }
+
+  else if (cmd === "setexpense") {
+    let [i, field, ...v] = args;
+    let e = db.expenses.find(x => x.id === i);
+    if (!e) return print("not found");
+
+    e[field] = v.join(" ");
+    saveDB();
+    print("updated");
+  }
+
+  else if (cmd === "expenses") {
+    db.expenses.forEach(e => {
+      print(`${e.id} | $${e.amount} | ${e.category}`);
     });
-
-    await saveAll();
-    addLine(`customer created: ${id}`);
-    return;
   }
 
-  if (cmd === "customers") {
-    if (!state.customers.length) {
-      addLine("(none)");
-      return;
-    }
+  // ===== LEDGER =====
 
-    addColumnList(
-      state.customers.map(c => `${c.id} ${c.name || ""}`.trim()),
-      10
-    );
-    return;
-  }
+  else if (cmd === "ledger") {
+    let revenue = 0;
+    let expenses = 0;
 
-  if (cmd === "viewcustomer") {
-    const id = args[0];
-    const c = state.customers.find(x => x.id === id);
-
-    if (!c) {
-      addLine("customer not found");
-      return;
-    }
-
-    addLine(`id: ${c.id}`);
-    addLine(`name: ${c.name}`);
-    addLine(`phone: ${c.phone}`);
-    addLine(`email: ${c.email}`);
-    addLine(`address: ${c.address}`);
-    addLine(`notes: ${c.notes}`);
-    return;
-  }
-
-  if (cmd === "setcustomer") {
-    const id = args[0];
-    const field = args[1];
-    const val = args.slice(2).join(" ");
-
-    const c = state.customers.find(x => x.id === id);
-
-    if (!c) {
-      addLine("customer not found");
-      return;
-    }
-
-    c[field] = val;
-
-    await saveAll();
-    addLine("customer updated");
-    return;
-  }
-
-  if (cmd === "newjob") {
-    const id = crypto.randomUUID().slice(0, 8);
-    const folderName = "job_" + id;
-
-    state.jobs.push({
-      id,
-      folder: folderName,
-      customer: "",
-      address: "",
-      technician: "",
-      status: "scheduled",
-      scheduled_date: "",
-      start_time: "",
-      end_time: "",
-      materials: "",
-      labor: "",
-      notes: "",
-      photos: [],
-      signature: ""
-    });
-
-    const jobDir = {
-      id: crypto.randomUUID(),
-      parentId: state.rootId,
-      name: folderName,
-      type: "dir",
-      content: null,
-      createdAt: nowIso()
-    };
-
-    const infoFile = {
-      id: crypto.randomUUID(),
-      parentId: jobDir.id,
-      name: "info",
-      type: "file",
-      content: `job id: ${id}\nstatus: scheduled`,
-      createdAt: nowIso()
-    };
-
-    const notesFile = {
-      id: crypto.randomUUID(),
-      parentId: jobDir.id,
-      name: "notes",
-      type: "file",
-      content: "",
-      createdAt: nowIso()
-    };
-
-    const materialsFile = {
-      id: crypto.randomUUID(),
-      parentId: jobDir.id,
-      name: "materials",
-      type: "file",
-      content: "",
-      createdAt: nowIso()
-    };
-
-    const laborFile = {
-      id: crypto.randomUUID(),
-      parentId: jobDir.id,
-      name: "labor",
-      type: "file",
-      content: "",
-      createdAt: nowIso()
-    };
-
-    state.nodes.push(jobDir, infoFile, notesFile, materialsFile, laborFile);
-
-    await saveAll();
-    addLine(`job created: ${id}`);
-    addLine(`folder created: ${folderName}`);
-    return;
-  }
-
-  if (cmd === "jobs") {
-    if (!state.jobs.length) {
-      addLine("(none)");
-      return;
-    }
-
-    addColumnList(
-      state.jobs.map(j => `${j.id} ${j.customer || ""} [${j.status}]`.trim()),
-      10
-    );
-    return;
-  }
-
-  if (cmd === "viewjob") {
-    const id = args[0];
-    const j = state.jobs.find(x => x.id === id);
-
-    if (!j) {
-      addLine("job not found");
-      return;
-    }
-
-    addLine(`id: ${j.id}`);
-    addLine(`folder: ${j.folder || ""}`);
-    addLine(`customer: ${j.customer}`);
-    addLine(`address: ${j.address}`);
-    addLine(`technician: ${j.technician}`);
-    addLine(`status: ${j.status}`);
-    addLine(`scheduled_date: ${j.scheduled_date}`);
-    addLine(`start_time: ${j.start_time}`);
-    addLine(`end_time: ${j.end_time}`);
-    addLine(`materials: ${j.materials}`);
-    addLine(`labor: ${j.labor}`);
-    addLine(`notes: ${j.notes}`);
-    return;
-  }
-
-  if (cmd === "setjob") {
-    const id = args[0];
-    const field = args[1];
-    const val = args.slice(2).join(" ");
-
-    const j = state.jobs.find(x => x.id === id);
-
-    if (!j) {
-      addLine("job not found");
-      return;
-    }
-
-    j[field] = val;
-
-    if (j.folder) {
-      const jobDir = childByName(state.rootId, j.folder);
-      if (jobDir) {
-        const infoFile = childByName(jobDir.id, "info");
-        if (infoFile && infoFile.type === "file") {
-          infoFile.content =
-`job id: ${j.id}
-customer: ${j.customer}
-address: ${j.address}
-technician: ${j.technician}
-status: ${j.status}
-scheduled_date: ${j.scheduled_date}
-start_time: ${j.start_time}
-end_time: ${j.end_time}
-materials: ${j.materials}
-labor: ${j.labor}
-notes: ${j.notes}`;
-        }
+    for (let i in db.invoices) {
+      if (db.invoices[i].paid) {
+        revenue += Number(db.invoices[i].amount || 0);
       }
     }
 
-    await saveAll();
-    addLine("job updated");
-    return;
-  }
-
-  if (cmd === "printjob") {
-    const id = args[0];
-    const job = state.jobs.find(x => x.id === id);
-
-    if (!job) {
-      addLine("job not found");
-      return;
-    }
-
-    const w = window.open("", "_blank");
-    w.document.write(buildPrintJobHtml(job));
-    w.document.close();
-
-    addLine("job packet opened");
-    return;
-  }
-
-  if (cmd === "newreceipt") {
-    const id = crypto.randomUUID().slice(0, 8);
-
-    state.receipts.push({
-      id,
-      vendor: "",
-      amount: 0,
-      date: "",
-      job: "",
-      category: "",
-      notes: ""
+    db.expenses.forEach(e => {
+      expenses += Number(e.amount || 0);
     });
 
-    await saveAll();
-    addLine(`receipt created: ${id}`);
-    return;
+    print("revenue: " + revenue);
+    print("expenses: " + expenses);
+    print("profit: " + (revenue - expenses));
   }
 
-  if (cmd === "receipts") {
-    if (!state.receipts.length) {
-      addLine("(none)");
-      return;
-    }
+  // ===== PRINT =====
 
-    addColumnList(
-      state.receipts.map(r => `${r.id} ${r.vendor || ""} $${r.amount || 0}`.trim()),
-      10
+  else if (cmd === "printpg") {
+    let win = window.open("", "", "width=800,height=600");
+    win.document.write(
+      "<pre style='font-family:Menlo;font-size:12px'>" +
+        terminal.textContent +
+        "</pre>"
     );
-    return;
+    win.document.close();
+    win.print();
   }
 
-  if (cmd === "viewreceipt") {
-    const id = args[0];
-    const r = state.receipts.find(x => x.id === id);
-
-    if (!r) {
-      addLine("receipt not found");
-      return;
-    }
-
-    addLine(`id: ${r.id}`);
-    addLine(`vendor: ${r.vendor}`);
-    addLine(`amount: ${r.amount}`);
-    addLine(`date: ${r.date}`);
-    addLine(`job: ${r.job}`);
-    addLine(`category: ${r.category}`);
-    addLine(`notes: ${r.notes}`);
-    return;
+  else {
+    print("unknown command");
   }
-
-  if (cmd === "setreceipt") {
-    const id = args[0];
-    const field = args[1];
-    const val = args.slice(2).join(" ");
-
-    const r = state.receipts.find(x => x.id === id);
-
-    if (!r) {
-      addLine("receipt not found");
-      return;
-    }
-
-    if (field === "amount") r.amount = parseFloat(val) || 0;
-    else r[field] = val;
-
-    state.ledger = state.ledger.filter(x => !(x.reference === r.id && x.type === "expense"));
-
-    addLedgerEntry({
-      date: r.date || nowIso().slice(0, 10),
-      type: "expense",
-      amount: r.amount,
-      account: "expense",
-      category: r.category || "",
-      job: r.job || "",
-      description: r.vendor || "",
-      reference: r.id
-    });
-
-    await saveAll();
-    addLine("receipt updated");
-    return;
-  }
-
-  if (cmd === "jobreceipts") {
-    const jobid = args[0];
-    const rs = state.receipts.filter(r => r.job === jobid);
-
-    if (!rs.length) {
-      addLine("(none)");
-      return;
-    }
-
-    addColumnList(
-      rs.map(r => `${r.id} ${r.vendor || ""} $${r.amount || 0}`.trim()),
-      10
-    );
-    return;
-  }
-
-  if (cmd === "jobtotal") {
-    const jobid = args[0];
-    const rs = state.receipts.filter(r => r.job === jobid);
-    const sum = rs.reduce((t, r) => t + (parseFloat(r.amount) || 0), 0);
-
-    addLine(`total: $${sum.toFixed(2)}`);
-    return;
-  }
-
-  if (cmd === "newinvoice") {
-    const id = crypto.randomUUID().slice(0, 8);
-
-    state.invoices.push({
-      id,
-      customer: "",
-      job: "",
-      amount: 0,
-      date: "",
-      status: "unpaid"
-    });
-
-    await saveAll();
-    addLine(`invoice created: ${id}`);
-    return;
-  }
-
-  if (cmd === "invoices") {
-    if (!state.invoices.length) {
-      addLine("(none)");
-      return;
-    }
-
-    addColumnList(
-      state.invoices.map(i => `${i.id} ${i.customer || ""} $${i.amount || 0} [${i.status || ""}]`.trim()),
-      10
-    );
-    return;
-  }
-
-  if (cmd === "viewinvoice") {
-    const id = args[0];
-    const i = state.invoices.find(x => x.id === id);
-
-    if (!i) {
-      addLine("invoice not found");
-      return;
-    }
-
-    addLine(`id: ${i.id}`);
-    addLine(`customer: ${i.customer}`);
-    addLine(`job: ${i.job}`);
-    addLine(`amount: ${i.amount}`);
-    addLine(`date: ${i.date}`);
-    addLine(`status: ${i.status}`);
-    return;
-  }
-
-  if (cmd === "setinvoice") {
-    const id = args[0];
-    const field = args[1];
-    const val = args.slice(2).join(" ");
-
-    const i = state.invoices.find(x => x.id === id);
-
-    if (!i) {
-      addLine("invoice not found");
-      return;
-    }
-
-    if (field === "amount") i.amount = parseFloat(val) || 0;
-    else i[field] = val;
-
-    await saveAll();
-    addLine("invoice updated");
-    return;
-  }
-
-  if (cmd === "newpayment") {
-    const id = crypto.randomUUID().slice(0, 8);
-
-    state.payments.push({
-      id,
-      invoice: "",
-      amount: 0,
-      date: "",
-      method: ""
-    });
-
-    await saveAll();
-    addLine(`payment recorded: ${id}`);
-    return;
-  }
-
-  if (cmd === "payments") {
-    if (!state.payments.length) {
-      addLine("(none)");
-      return;
-    }
-
-    addColumnList(
-      state.payments.map(p => `${p.id} invoice:${p.invoice || ""} $${p.amount || 0}`.trim()),
-      10
-    );
-    return;
-  }
-
-  if (cmd === "viewpayment") {
-    const id = args[0];
-    const p = state.payments.find(x => x.id === id);
-
-    if (!p) {
-      addLine("payment not found");
-      return;
-    }
-
-    addLine(`id: ${p.id}`);
-    addLine(`invoice: ${p.invoice}`);
-    addLine(`amount: ${p.amount}`);
-    addLine(`date: ${p.date}`);
-    addLine(`method: ${p.method}`);
-    return;
-  }
-
-  if (cmd === "ledger") {
-    if (!state.ledger.length) {
-      addLine("(none)");
-      return;
-    }
-
-    addColumnList(
-      state.ledger.map(x => `${x.id} ${x.type} $${x.amount} ${x.category || ""} ${x.reference || ""}`.trim()),
-      10
-    );
-    return;
-  }
-
-  if (cmd === "jobledger") {
-    const jobid = args[0];
-    const entries = ledgerForJob(jobid);
-
-    if (!entries.length) {
-      addLine("(none)");
-      return;
-    }
-
-    addColumnList(
-      entries.map(x => `${x.id} ${x.type} $${x.amount} ${x.category || ""} ${x.reference || ""}`.trim()),
-      10
-    );
-    return;
-  }
-
-  if (cmd === "profit") {
-    const jobid = args[0];
-
-    if (!jobid) {
-      addLine("usage: profit <jobid>");
-      return;
-    }
-
-    addLine(`income: $${totalIncomeForJob(jobid).toFixed(2)}`);
-    addLine(`expenses: $${totalExpenseForJob(jobid).toFixed(2)}`);
-    addLine(`profit: $${profitForJob(jobid).toFixed(2)}`);
-    return;
-  }
-
-  if (cmd === "businessplan") {
-    const p = state.businessplan;
-
-    addLine("business plan targets");
-    addLine(`revenue_target: ${p.revenue_target}`);
-    addLine(`job_target: ${p.job_target}`);
-    addLine(`profit_target: ${p.profit_target}`);
-    addLine(`marketing_budget: ${p.marketing_budget}`);
-    addLine(`labor_budget: ${p.labor_budget}`);
-    addLine(`materials_budget: ${p.materials_budget}`);
-    addLine(`customer_growth: ${p.customer_growth}`);
-    addLine(`review_target: ${p.review_target}`);
-    return;
-  }
-
-  if (cmd === "setplan") {
-    const field = args[0];
-    const val = parseFloat(args[1]);
-
-    if (!state.businessplan.hasOwnProperty(field)) {
-      addLine("invalid plan field");
-      return;
-    }
-
-    state.businessplan[field] = isNaN(val) ? 0 : val;
-
-    await saveAll();
-    addLine("plan updated");
-    return;
-  }
-
-  if (cmd === "scorecard") {
-    const p = state.businessplan;
-
-    const revenue = state.ledger
-      .filter(x => x.type === "income")
-      .reduce((t, x) => t + (parseFloat(x.amount) || 0), 0);
-
-    const profit = revenue - state.ledger
-      .filter(x => x.type === "expense")
-      .reduce((t, x) => t + (parseFloat(x.amount) || 0), 0);
-
-    const jobs = state.jobs.length;
-    const customers = state.customers.length;
-
-    addLine("scorecard");
-    addLine("");
-    addLine(`revenue: ${revenue} / target ${p.revenue_target}`);
-    addLine(`profit: ${profit} / target ${p.profit_target}`);
-    addLine(`jobs: ${jobs} / target ${p.job_target}`);
-    addLine(`customers: ${customers} / target ${p.customer_growth}`);
-
-    const revenuePct = p.revenue_target ? ((revenue / p.revenue_target) * 100).toFixed(1) : 0;
-    const jobsPct = p.job_target ? ((jobs / p.job_target) * 100).toFixed(1) : 0;
-    const profitPct = p.profit_target ? ((profit / p.profit_target) * 100).toFixed(1) : 0;
-
-    addLine("");
-    addLine(`revenue progress: ${revenuePct}%`);
-    addLine(`profit progress: ${profitPct}%`);
-    addLine(`job progress: ${jobsPct}%`);
-    return;
-  }
-
-  if (cmd === "report" && args[0] === "financial") {
-    const w = window.open("", "_blank");
-    w.document.write(buildFinancialReportHtml());
-    w.document.close();
-
-    addLine("financial report opened");
-    return;
-  }
-
-  if (cmd === "report" && args[0] === "tax") {
-    const w = window.open("", "_blank");
-    w.document.write(buildTaxReportHtml());
-    w.document.close();
-
-    addLine("tax report opened");
-    return;
-  }
-
-  if (cmd === "report" && args[0] === "dashboard") {
-    const w = window.open("", "_blank");
-    w.document.write(buildDashboardReportHtml());
-    w.document.close();
-
-    addLine("dashboard report opened");
-    return;
-  }
-
-  if (cmd === "adminauth") {
-    state.adminUnlocked = true;
-    localStorage.setItem("spirenet_role", "admin");
-
-    await saveAll();
-    addLine("admin barrier unlocked");
-    return;
-  }
-
-  addLine("unknown command");
 }
 
-/* =========================
-   boot
-========================= */
-(async () => {
-  await loadAll();
+// ===== INPUT FIX =====
 
-  addLine(`${APP_NAME} ready`);
-
-  if (state.adminUnlocked) {
-    addLine("role: admin");
-    addLine("admin barrier unlocked");
+input.addEventListener("keydown", function (e) {
+  if (e.key === "Enter") {
+    let val = input.value;
+    input.value = "";
+    handleCommand(val);
   }
+});
 
-  addLine(`type "help" to list commands`);
+document.addEventListener("click", () => input.focus());
+window.onload = () => input.focus();
 
-  render();
+// ===== START =====
 
-  setTimeout(focusInput, 120);
-  setTimeout(focusInput, 400);
-})();
+print("spirenet");
+print("ready");
+print("type help");
