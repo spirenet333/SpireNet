@@ -9,6 +9,7 @@ import * as ledger from "./src/commands/ledger.js";
 import * as expenses from "./src/commands/expenses.js";
 
 loadDB();
+
 // ===== INIT =====
 
 let db = JSON.parse(localStorage.getItem("spirenet_db") || "{}");
@@ -189,6 +190,8 @@ function handleCommand(raw) {
     print(JSON.stringify(db.jobs[args[0]], null, 2));
   }
 
+  else if (cmd === "jobprofit") jobs.jobProfit(args, print);
+  
   // ===== RECEIPTS =====
 
   else if (cmd === "newreceipt") {
