@@ -1,25 +1,23 @@
-export function ledger(db, print) {
+import { db } from "../core/db.js";
+
+export function runLedger(print) {
   let revenue = 0;
   let expenses = 0;
 
   for (let id in db.invoices) {
-    let inv = db.invoices[id];
-    if (inv.paid === true) {
-      revenue += Number(inv.amount || 0);
+    if (db.invoices[id].paid) {
+      revenue += Number(db.invoices[id].amount || 0);
     }
   }
 
   for (let id in db.receipts) {
-    let r = db.receipts[id];
-    expenses += Number(r.amount || 0);
+    expenses += Number(db.receipts[id].amount || 0);
   }
 
-  let profit = revenue - expenses;
-
   print(`
-ledger report:
+ledger:
 revenue: ${revenue}
 expenses: ${expenses}
-profit: ${profit}
+profit: ${revenue - expenses}
 `);
 }
