@@ -1,3 +1,14 @@
+import { loadDB } from "./src/core/db.js";
+
+import * as customers from "./src/commands/customers.js";
+import * as jobs from "./src/commands/jobs.js";
+import * as receipts from "./src/commands/receipts.js";
+import * as invoices from "./src/commands/invoices.js";
+import * as payments from "./src/commands/payments.js";
+import * as ledger from "./src/commands/ledger.js";
+import * as expenses from "./src/commands/expenses.js";
+
+loadDB();
 // ===== INIT =====
 
 let db = JSON.parse(localStorage.getItem("spirenet_db") || "{}");
