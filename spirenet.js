@@ -1,3 +1,4 @@
+import { ledger } from "./src/commands/ledger.js";
 if (localStorage.getItem("spirenet_usb_verified") !== "true") {
   window.location.href = "index.html";
 }
