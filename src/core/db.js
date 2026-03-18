@@ -3,6 +3,7 @@ export let db = {
   jobs: {},
   receipts: {},
   invoices: {},
+  expenses: {},
   payments: {}
 };
 
