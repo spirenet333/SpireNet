@@ -1,4 +1,11 @@
-import { ledger } from "./src/commands/ledger.js";
+import { loadDB, db } from "./src/core/db.js";
+
+import * as customers from "./src/commands/customers.js";
+import * as jobs from "./src/commands/jobs.js";
+import * as receipts from "./src/commands/receipts.js";
+import * as invoices from "./src/commands/invoices.js";
+import * as payments from "./src/commands/payments.js";
+import * as ledger from "./src/commands/ledger.js";
 if (localStorage.getItem("spirenet_usb_verified") !== "true") {
   window.location.href = "index.html";
 }
