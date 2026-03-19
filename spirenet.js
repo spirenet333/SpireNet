@@ -317,6 +317,9 @@ function handleCommand(raw) {
 
 // ===== INPUT FIX =====
 
+const input = document.getElementById("input");
+
+// ENTER key
 input.addEventListener("keydown", function (e) {
   if (e.key === "Enter") {
     let val = input.value;
@@ -325,8 +328,17 @@ input.addEventListener("keydown", function (e) {
   }
 });
 
-document.addEventListener("click", () => input.focus());
-window.onload = () => input.focus();
+// 🔥 FORCE FOCUS LOOP (THIS FIXES iPAD ISSUE)
+function focusInput() {
+  input.focus();
+}
+
+setInterval(focusInput, 500);
+
+// also on load
+window.onload = () => {
+  input.focus();
+};
 
 // ===== START =====
 
