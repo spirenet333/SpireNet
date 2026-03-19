@@ -1,0 +1,30 @@
+body {
+  margin: 0;
+  background: black;
+  color: white;
+  font-family: Menlo, monospace;
+  font-size: 12px;
+}
+
+#app {
+  padding: 10px;
+}
+
+#terminal {
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  margin-bottom: 40px;
+}
+
+#input {
+  position: fixed;
+  bottom: 10px;
+  left: 10px;
+  width: 95%;
+  background: black;
+  color: white;
+  border: none;
+  outline: none;
+  font-family: Menlo, monospace;
+  font-size: 12px;
+}
