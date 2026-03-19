@@ -16,6 +16,8 @@ const state = {
   historyIndex: 0,
   deeperUnlocked: false,
   rootGranted: false,
+  warningMode: false,
+  breachMode: false,
   directories: {
     "~": ["home", "logs", "sys", "vault"],
     "~/home": ["notes", "users"],
@@ -31,7 +33,7 @@ const state = {
   },
   hiddenDirectories: {
     "~/vault/sealed": ["blacksite", "keys"],
-    "~/vault/sealed/blacksite": ["entry.txt", "map.txt"],
+    "~/vault/sealed/blacksite": ["entry.txt", "map.txt", "warning.txt"],
     "~/vault/sealed/keys": ["cipher.key", "root.token"]
   },
   fileMap: {
@@ -78,6 +80,11 @@ const state = {
       "[SOUTH] null chamber",
       "[WEST] service descent"
     ],
+    "~/vault/sealed/blacksite/warning.txt": [
+      "WARNING",
+      "Observation latency exceeded acceptable threshold.",
+      "Null chamber remains unverified."
+    ],
     "~/vault/sealed/keys/cipher.key": [
       "CIPHER KEY",
       "VX-11 / ECHO / 7741",
@@ -108,7 +115,11 @@ const rootCommands = [
   "scan",
   "unlock",
   "grant",
-  "decrypt"
+  "decrypt",
+  "trace",
+  "ping",
+  "observe",
+  "seal"
 ];
 
 const commandMap = {
@@ -130,6 +141,10 @@ const commandMap = {
     addSystemLine("unlock sealed - Reveal sealed structure");
     addSystemLine("grant root    - Request root elevation");
     addSystemLine("decrypt file  - Decrypt supported target");
+    addSystemLine("trace node    - Trace current branch");
+    addSystemLine("ping relay    - Test a route");
+    addSystemLine("observe null  - Probe the null chamber");
+    addSystemLine("seal system   - Reseal elevated access");
     addSystemLine("reboot        - Restart interface");
   },
 
@@ -142,6 +157,12 @@ const commandMap = {
     addSystemLine("Command-driven shell interface.");
     addSystemLine("Monochrome terminal profile active.");
     addSystemLine("Deeper system access supported.");
+    if (state.warningMode) {
+      addSystemLine("Advisory state: elevated.");
+    }
+    if (state.breachMode) {
+      addSystemLine("Null chamber observation state: unstable.");
+    }
   },
 
   status: () => {
@@ -150,6 +171,8 @@ const commandMap = {
     addSystemLine("USB gate: AUTHORIZED");
     addSystemLine(`Sealed layer: ${state.deeperUnlocked ? "REVEALED" : "HIDDEN"}`);
     addSystemLine(`Root access: ${state.rootGranted ? "GRANTED" : "DENIED"}`);
+    addSystemLine(`Warning state: ${state.warningMode ? "ELEVATED" : "NORMAL"}`);
+    addSystemLine(`Observation state: ${state.breachMode ? "UNSTABLE" : "DORMANT"}`);
     addSystemLine("Link: STABLE");
     addSystemLine("Shell: ACTIVE");
   },
@@ -214,6 +237,10 @@ function addLine(text = "", className = "line") {
 }
 
 function addSystemLine(text = "") {
+  addLine(text, "line system");
+}
+
+function addAlertLine(text = "") {
   addLine(text, "line system");
 }
 
@@ -284,9 +311,61 @@ function runRebootSequence() {
   state.historyIndex = state.history.length;
   state.deeperUnlocked = false;
   state.rootGranted = false;
+  state.warningMode = false;
+  state.breachMode = false;
   commandInput.value = "";
   setPrompt();
+  syncVisualState();
   bootSequence();
+}
+
+function syncVisualState() {
+  if (state.breachMode) {
+    document.body.classList.add("breach-mode");
+    document.body.classList.remove("warning-mode");
+    return;
+  }
+
+  if (state.warningMode) {
+    document.body.classList.add("warning-mode");
+    document.body.classList.remove("breach-mode");
+    return;
+  }
+
+  document.body.classList.remove("warning-mode");
+  document.body.classList.remove("breach-mode");
+}
+
+function queueWarningSequence(lines, delay = 120) {
+  lines.forEach((line, index) => {
+    setTimeout(() => {
+      addAlertLine(line);
+      focusCommandInput();
+    }, delay * (index + 1));
+  });
+}
+
+function enterWarningMode() {
+  if (state.warningMode) return;
+  state.warningMode = true;
+  syncVisualState();
+  queueWarningSequence([
+    "NOTICE: elevated clearance changed local system posture",
+    "NOTICE: passive audit enabled",
+    "NOTICE: sealed branch telemetry now visible"
+  ]);
+}
+
+function enterBreachMode() {
+  if (state.breachMode) return;
+  state.breachMode = true;
+  state.warningMode = true;
+  syncVisualState();
+  queueWarningSequence([
+    "WARNING: null chamber observation initiated",
+    "WARNING: response latency irregular",
+    "WARNING: passive monitor unable to verify chamber state"
+  ]);
 }
 
 function pathExists(path) {
@@ -343,6 +422,10 @@ function handleCd(args) {
 
   state.currentPath = nextPath;
   setPrompt();
+
+  if (state.rootGranted && nextPath === "~/vault/sealed/blacksite" && !state.warningMode) {
+    enterWarningMode();
+  }
 }
 
 function handleCat(args) {
@@ -378,6 +461,10 @@ function handleCat(args) {
   }
 
   state.fileMap[fullPath].forEach((line) => addSystemLine(line));
+
+  if (fullPath.endsWith("warning.txt")) {
+    enterWarningMode();
+  }
 }
 
 function handleScan() {
@@ -404,6 +491,12 @@ function handleScan() {
   if (state.currentPath === "~/vault/sealed/keys") {
     addSystemLine("Key material detected.");
     addSystemLine(state.rootGranted ? "Root token readable." : "Root token locked.");
+    return;
+  }
+
+  if (state.currentPath === "~/vault/sealed/blacksite") {
+    addSystemLine("Blacksite topology unresolved.");
+    addSystemLine(state.breachMode ? "Null chamber telemetry unstable." : "Null chamber telemetry dormant.");
     return;
   }
 
@@ -469,6 +562,7 @@ function handleGrant(args) {
   state.rootGranted = true;
   addSystemLine("root elevation granted");
   addSystemLine("sensitive tokens unlocked");
+  enterWarningMode();
 }
 
 function handleDecrypt(args) {
@@ -498,6 +592,111 @@ function handleDecrypt(args) {
   addSystemLine("token.signature = SPN-ROOT-77");
   addSystemLine("override.window = open");
   addSystemLine("clearance.profile = elevated");
+}
+
+function handleTrace(args) {
+  const target = (args[0] || "").trim().toLowerCase();
+
+  if (!target) {
+    addSystemLine("trace: missing target");
+    return;
+  }
+
+  if (target !== "node") {
+    addSystemLine(`trace: unsupported target: ${target}`);
+    return;
+  }
+
+  addSystemLine(`Tracing from ${state.currentPath} ...`);
+
+  if (state.currentPath === "~/vault/sealed/blacksite") {
+    addSystemLine("trace.path = blacksite > relay > null chamber");
+    addSystemLine("trace.integrity = partial");
+    addSystemLine("trace.loss = 18%");
+    return;
+  }
+
+  addSystemLine("trace complete");
+  addSystemLine("no unresolved divergence detected");
+}
+
+function handlePing(args) {
+  const target = (args[0] || "").trim().toLowerCase();
+
+  if (!target) {
+    addSystemLine("ping: missing target");
+    return;
+  }
+
+  if (target !== "relay") {
+    addSystemLine(`ping: unsupported target: ${target}`);
+    return;
+  }
+
+  if (state.currentPath !== "~/vault/sealed/blacksite") {
+    addSystemLine("ping: relay target only available from ~/vault/sealed/blacksite");
+    return;
+  }
+
+  addSystemLine("PING relay ...");
+  addSystemLine("reply 1 time=11ms");
+  addSystemLine("reply 2 time=12ms");
+  addSystemLine(state.breachMode ? "reply 3 time=timeout" : "reply 3 time=10ms");
+}
+
+function handleObserve(args) {
+  const target = (args[0] || "").trim().toLowerCase();
+
+  if (!target) {
+    addSystemLine("observe: missing target");
+    return;
+  }
+
+  if (target !== "null") {
+    addSystemLine(`observe: unsupported target: ${target}`);
+    return;
+  }
+
+  if (state.currentPath !== "~/vault/sealed/blacksite") {
+    addSystemLine("observe: null target only available from ~/vault/sealed/blacksite");
+    return;
+  }
+
+  if (!state.rootGranted) {
+    addSystemLine("observe: root elevation required");
+    return;
+  }
+
+  addSystemLine("observing null chamber ...");
+  addSystemLine("frame 01 acquired");
+  addSystemLine("frame 02 acquired");
+  addSystemLine("frame 03 inconsistent");
+  enterBreachMode();
+}
+
+function handleSeal(args) {
+  const target = (args[0] || "").trim().toLowerCase();
+
+  if (!target) {
+    addSystemLine("seal: missing target");
+    return;
+  }
+
+  if (target !== "system") {
+    addSystemLine(`seal: unsupported target: ${target}`);
+    return;
+  }
+
+  state.currentPath = "~";
+  state.deeperUnlocked = false;
+  state.rootGranted = false;
+  state.warningMode = false;
+  state.breachMode = false;
+  setPrompt();
+  syncVisualState();
+  addSystemLine("system resealed");
+  addSystemLine("elevated branches hidden");
+  addSystemLine("root access revoked");
 }
 
 function parseCommand(rawInput) {
@@ -534,6 +733,26 @@ function parseCommand(rawInput) {
 
   if (cmd === "decrypt") {
     handleDecrypt(args);
+    return;
+  }
+
+  if (cmd === "trace") {
+    handleTrace(args);
+    return;
+  }
+
+  if (cmd === "ping") {
+    handlePing(args);
+    return;
+  }
+
+  if (cmd === "observe") {
+    handleObserve(args);
+    return;
+  }
+
+  if (cmd === "seal") {
+    handleSeal(args);
     return;
   }
 
@@ -685,8 +904,49 @@ document.addEventListener("keydown", (event) => {
         commandInput.value = tokens.join(" ");
         focusCommandInput();
       }
+      return;
+    }
+
+    if (command === "trace") {
+      const matches = ["node"].filter((item) => item.startsWith(partial));
+      if (matches.length === 1) {
+        tokens[tokens.length - 1] = matches[0];
+        commandInput.value = tokens.join(" ");
+        focusCommandInput();
+      }
+      return;
+    }
+
+    if (command === "ping") {
+      const matches = ["relay"].filter((item) => item.startsWith(partial));
+      if (matches.length === 1) {
+        tokens[tokens.length - 1] = matches[0];
+        commandInput.value = tokens.join(" ");
+        focusCommandInput();
+      }
+      return;
+    }
+
+    if (command === "observe") {
+      const matches = ["null"].filter((item) => item.startsWith(partial));
+      if (matches.length === 1) {
+        tokens[tokens.length - 1] = matches[0];
+        commandInput.value = tokens.join(" ");
+        focusCommandInput();
+      }
+      return;
+    }
+
+    if (command === "seal") {
+      const matches = ["system"].filter((item) => item.startsWith(partial));
+      if (matches.length === 1) {
+        tokens[tokens.length - 1] = matches[0];
+        commandInput.value = tokens.join(" ");
+        focusCommandInput();
+      }
     }
   }
 });
 
+syncVisualState();
 bootSequence();
