@@ -1,4 +1,7 @@
-/* RESET */
+/* =========================
+   SPIRENET V17 / STYLE PASS 2
+   ========================= */
+
 * {
   margin: 0;
   padding: 0;
@@ -6,151 +9,305 @@
   font-family: monospace;
 }
 
-html, body {
+html,
+body {
   height: 100%;
+  width: 100%;
   background: #000;
-  color: #00ff9f;
+  color: #00f7a5;
+  overflow: hidden;
 }
 
-/* APP FRAME */
+body {
+  position: relative;
+}
+
+/* faint system glow */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at center, rgba(0, 247, 165, 0.045) 0%, rgba(0, 0, 0, 0) 48%),
+    linear-gradient(to bottom, rgba(0, 247, 165, 0.03), rgba(0, 0, 0, 0.01) 22%, rgba(0, 0, 0, 0.04) 100%);
+  opacity: 0.95;
+}
+
+/* subtle scan lines */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0.02) 0px,
+    rgba(255, 255, 255, 0.02) 1px,
+    rgba(0, 0, 0, 0) 2px,
+    rgba(0, 0, 0, 0) 4px
+  );
+  opacity: 0.16;
+}
+
 #app {
   height: 100%;
   width: 100%;
+  padding: 20px;
 }
 
 #screen-frame {
   position: relative;
   height: 100%;
   width: 100%;
+  border: 1px solid rgba(0, 247, 165, 0.22);
+  box-shadow:
+    0 0 0 1px rgba(0, 247, 165, 0.05) inset,
+    0 0 40px rgba(0, 247, 165, 0.05) inset;
   overflow: hidden;
+  background:
+    linear-gradient(to bottom, rgba(0, 247, 165, 0.03), rgba(0, 0, 0, 0.01) 16%, rgba(0, 0, 0, 0.15) 100%);
 }
 
-/* LAYERS */
+/* corner markers */
+#screen-frame::before,
+#screen-frame::after {
+  content: "";
+  position: absolute;
+  width: 120px;
+  height: 120px;
+  border-color: rgba(0, 247, 165, 0.32);
+  pointer-events: none;
+}
+
+#screen-frame::before {
+  top: 10px;
+  left: 10px;
+  border-top: 1px solid rgba(0, 247, 165, 0.32);
+  border-left: 1px solid rgba(0, 247, 165, 0.32);
+}
+
+#screen-frame::after {
+  right: 10px;
+  bottom: 10px;
+  border-right: 1px solid rgba(0, 247, 165, 0.32);
+  border-bottom: 1px solid rgba(0, 247, 165, 0.32);
+}
+
 .layer {
   position: absolute;
   inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
 }
 
 .hidden {
-  display: none;
+  display: none !important;
 }
 
 .active {
   display: flex;
 }
 
-/* CENTER PANELS */
-.center-panel {
-  text-align: center;
-  max-width: 500px;
+/* =========================
+   BOOT / GATE SCREENS
+   ========================= */
+
+#boot-overlay,
+#usb-gate {
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
 }
 
-/* BOOT SCREEN */
+.center-panel {
+  width: min(92vw, 720px);
+  text-align: center;
+  padding: 40px 24px;
+  border: 1px solid rgba(0, 247, 165, 0.18);
+  background: rgba(0, 0, 0, 0.35);
+  box-shadow:
+    0 0 0 1px rgba(0, 247, 165, 0.03) inset,
+    0 0 30px rgba(0, 247, 165, 0.04);
+}
+
 .brand {
-  font-size: 2rem;
-  letter-spacing: 4px;
-  margin-bottom: 10px;
+  font-size: clamp(28px, 4vw, 52px);
+  letter-spacing: 0.35em;
+  margin-bottom: 14px;
+  text-transform: uppercase;
+  text-shadow: 0 0 8px rgba(0, 247, 165, 0.18);
 }
 
 .subbrand {
-  font-size: 0.9rem;
-  opacity: 0.7;
-  margin-bottom: 20px;
+  font-size: clamp(11px, 1.5vw, 15px);
+  letter-spacing: 0.25em;
+  opacity: 0.72;
+  margin-bottom: 28px;
+  text-transform: uppercase;
 }
 
 .boot-line {
-  font-size: 0.8rem;
-  opacity: 0.6;
+  font-size: 14px;
+  opacity: 0.82;
 }
 
-/* USB GATE */
 .gate-title {
-  font-size: 1.2rem;
-  margin-bottom: 10px;
+  font-size: clamp(22px, 2.3vw, 34px);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  margin-bottom: 16px;
 }
 
 .gate-text {
-  font-size: 0.9rem;
+  font-size: 15px;
   opacity: 0.7;
-  margin-bottom: 20px;
+  margin-bottom: 28px;
 }
 
 #usb-enter-btn {
-  padding: 10px 20px;
   background: transparent;
-  border: 1px solid #00ff9f;
-  color: #00ff9f;
+  color: #00f7a5;
+  border: 1px solid rgba(0, 247, 165, 0.72);
+  padding: 12px 24px;
+  min-width: 180px;
+  font-size: 15px;
+  letter-spacing: 0.08em;
   cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
 }
 
-#usb-enter-btn:hover {
-  background: #00ff9f;
-  color: #000;
+#usb-enter-btn:hover,
+#usb-enter-btn:focus {
+  background: rgba(0, 247, 165, 0.12);
+  box-shadow: 0 0 12px rgba(0, 247, 165, 0.12);
+  outline: none;
 }
 
-/* TERMINAL */
+/* =========================
+   TERMINAL VIEW
+   ========================= */
+
 #terminal-view {
+  display: flex;
   flex-direction: column;
   justify-content: flex-start;
-  padding: 20px;
+  padding: 18px 18px 14px 18px;
 }
 
-/* HEADER */
+/* top bar */
 #terminal-header {
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 16px;
+  min-height: 34px;
+  padding: 0 2px 10px 2px;
   margin-bottom: 10px;
-  font-size: 0.8rem;
-  opacity: 0.7;
+  border-bottom: 1px solid rgba(0, 247, 165, 0.12);
+  font-size: 13px;
+  letter-spacing: 0.04em;
 }
 
-/* OUTPUT AREA */
+.terminal-title {
+  opacity: 0.76;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.terminal-status {
+  opacity: 1;
+  text-align: right;
+}
+
+/* output area */
 #terminal-output {
   flex: 1;
-  overflow-y: auto;
   width: 100%;
-  font-size: 0.9rem;
-  padding-bottom: 10px;
-}
-
-/* EACH LINE */
-.line {
-  margin-bottom: 4px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 2px 2px 12px 2px;
+  font-size: 15px;
+  line-height: 1.32;
   white-space: pre-wrap;
+  word-break: break-word;
 }
 
-/* INPUT */
+/* lines */
+.line {
+  margin-bottom: 3px;
+  text-shadow: 0 0 6px rgba(0, 247, 165, 0.08);
+}
+
+/* bottom input strip */
 #terminal-form {
   width: 100%;
+  border-top: 1px solid rgba(0, 247, 165, 0.12);
+  padding-top: 10px;
 }
 
 #prompt-line {
   display: flex;
   align-items: center;
   gap: 8px;
+  width: 100%;
+  min-height: 28px;
 }
 
 #prompt-label {
   flex-shrink: 0;
+  font-size: 15px;
+  line-height: 1.2;
 }
 
 #command-input {
   flex: 1;
+  min-width: 0;
   background: transparent;
   border: none;
   outline: none;
-  color: #00ff9f;
-  font-size: 0.9rem;
+  color: #00f7a5;
+  font-size: 15px;
+  line-height: 1.2;
+  caret-color: #7affcf;
+  padding: 0;
 }
 
-/* SCROLLBAR (OPTIONAL CLEAN LOOK) */
+/* cleaner scroll */
 #terminal-output::-webkit-scrollbar {
-  width: 6px;
+  width: 8px;
+}
+
+#terminal-output::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 #terminal-output::-webkit-scrollbar-thumb {
-  background: #00ff9f;
+  background: rgba(0, 247, 165, 0.28);
+  border-radius: 999px;
+}
+
+/* iPad / smaller screen adjustments */
+@media (max-width: 1100px) {
+  #app {
+    padding: 10px;
+  }
+
+  #terminal-view {
+    padding: 12px 12px 10px 12px;
+  }
+
+  #terminal-header {
+    font-size: 12px;
+    margin-bottom: 8px;
+  }
+
+  #terminal-output,
+  #prompt-label,
+  #command-input {
+    font-size: 14px;
+  }
+
+  .center-panel {
+    padding: 32px 18px;
+  }
 }
