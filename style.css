@@ -13,18 +13,13 @@ body {
 #terminal {
   white-space: pre-wrap;
   word-wrap: break-word;
-  margin-bottom: 40px;
+  margin: 0;
 }
 
 #input {
   position: fixed;
-  bottom: 10px;
-  left: 10px;
-  width: 95%;
-  background: black;
-  color: white;
-  border: none;
-  outline: none;
-  font-family: Menlo, monospace;
-  font-size: 12px;
+  left: -9999px;
+  top: 0;
+  opacity: 0;
+  pointer-events: none;
 }
