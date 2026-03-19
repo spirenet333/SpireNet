@@ -1,6 +1,6 @@
 /* =========================
    SPIRENET V17
-   OPTION A — REAL TERMINAL
+   STEP 7 / REAL TERMINAL+
    BLACK / WHITE
    ========================= */
 
@@ -24,18 +24,16 @@ body {
   position: relative;
 }
 
-/* subtle ambient glow */
 body::before {
   content: "";
   position: fixed;
   inset: 0;
   pointer-events: none;
   background:
-    radial-gradient(circle at center, rgba(255, 255, 255, 0.03) 0%, rgba(0, 0, 0, 0) 50%);
+    radial-gradient(circle at center, rgba(255, 255, 255, 0.02) 0%, rgba(0, 0, 0, 0) 52%);
   opacity: 1;
 }
 
-/* faint scanlines */
 body::after {
   content: "";
   position: fixed;
@@ -43,12 +41,12 @@ body::after {
   pointer-events: none;
   background: repeating-linear-gradient(
     to bottom,
-    rgba(255, 255, 255, 0.015) 0px,
-    rgba(255, 255, 255, 0.015) 1px,
+    rgba(255, 255, 255, 0.012) 0px,
+    rgba(255, 255, 255, 0.012) 1px,
     transparent 2px,
     transparent 4px
   );
-  opacity: 0.08;
+  opacity: 0.06;
 }
 
 #app {
@@ -63,13 +61,17 @@ body::after {
   width: 100%;
   overflow: hidden;
   background:
-    linear-gradient(to bottom, rgba(255, 255, 255, 0.02), rgba(0, 0, 0, 0.01) 18%, rgba(0, 0, 0, 0.12) 100%);
-  border: 1px solid rgba(255, 255, 255, 0.15);
+    linear-gradient(
+      to bottom,
+      rgba(255, 255, 255, 0.018),
+      rgba(0, 0, 0, 0.01) 18%,
+      rgba(0, 0, 0, 0.12) 100%
+    );
+  border: 1px solid rgba(255, 255, 255, 0.14);
   box-shadow:
-    0 0 0 1px rgba(255, 255, 255, 0.04) inset;
+    0 0 0 1px rgba(255, 255, 255, 0.03) inset;
 }
 
-/* corner markers */
 #screen-frame::before,
 #screen-frame::after {
   content: "";
@@ -82,15 +84,15 @@ body::after {
 #screen-frame::before {
   top: 10px;
   left: 10px;
-  border-top: 1px solid rgba(255, 255, 255, 0.22);
-  border-left: 1px solid rgba(255, 255, 255, 0.22);
+  border-top: 1px solid rgba(255, 255, 255, 0.18);
+  border-left: 1px solid rgba(255, 255, 255, 0.18);
 }
 
 #screen-frame::after {
   right: 10px;
   bottom: 10px;
-  border-right: 1px solid rgba(255, 255, 255, 0.22);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.22);
+  border-right: 1px solid rgba(255, 255, 255, 0.18);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.18);
 }
 
 .layer {
@@ -106,9 +108,7 @@ body::after {
   display: flex;
 }
 
-/* =========================
-   BOOT / GATE
-   ========================= */
+/* boot / gate */
 
 #boot-overlay,
 #usb-gate {
@@ -121,7 +121,7 @@ body::after {
   width: min(92vw, 720px);
   text-align: center;
   padding: 40px 24px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   background: rgba(0, 0, 0, 0.35);
 }
 
@@ -145,7 +145,7 @@ body::after {
 .boot-line {
   font-size: 14px;
   color: #d7d7d7;
-  opacity: 0.85;
+  opacity: 0.82;
 }
 
 .gate-title {
@@ -166,7 +166,7 @@ body::after {
 #usb-enter-btn {
   background: transparent;
   color: #f2f2f2;
-  border: 1px solid rgba(255, 255, 255, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.42);
   padding: 12px 24px;
   min-width: 180px;
   font-size: 15px;
@@ -177,14 +177,12 @@ body::after {
 
 #usb-enter-btn:hover,
 #usb-enter-btn:focus {
-  background: rgba(255, 255, 255, 0.08);
-  border-color: rgba(255, 255, 255, 0.75);
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.7);
   outline: none;
 }
 
-/* =========================
-   TERMINAL
-   ========================= */
+/* terminal */
 
 #terminal-view {
   display: flex;
@@ -193,7 +191,6 @@ body::after {
   padding: 18px 18px 14px 18px;
 }
 
-/* header */
 #terminal-header {
   display: grid;
   grid-template-columns: 1fr auto;
@@ -202,14 +199,14 @@ body::after {
   min-height: 34px;
   padding: 0 2px 10px 2px;
   margin-bottom: 10px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.09);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   font-size: 13px;
   letter-spacing: 0.04em;
 }
 
 .terminal-title {
-  color: #d7d7d7;
-  opacity: 0.82;
+  color: #d0d0d0;
+  opacity: 0.8;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -220,7 +217,6 @@ body::after {
   text-align: right;
 }
 
-/* output */
 #terminal-output {
   flex: 1;
   width: 100%;
@@ -233,38 +229,33 @@ body::after {
   word-break: break-word;
 }
 
-/* default line */
 .line {
   margin-bottom: 2px;
-  color: #d6d6d6;
+  color: #d5d5d5;
 }
 
-/* user command lines */
 .line.user {
   color: #ffffff;
 }
 
-/* system lines */
 .line.system {
   color: #cfcfcf;
 }
 
-/* dim prompt for echoed commands */
 .prompt-dim {
-  color: #7f7f7f;
+  color: #7a7a7a;
 }
 
-/* input strip */
 #terminal-form {
   width: 100%;
-  border-top: 1px solid rgba(255, 255, 255, 0.09);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
   padding-top: 10px;
 }
 
 #prompt-line {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 0;
   width: 100%;
   min-height: 28px;
 }
@@ -274,6 +265,7 @@ body::after {
   font-size: 15px;
   line-height: 1.2;
   color: #9a9a9a;
+  margin-right: 0;
 }
 
 #command-input {
@@ -285,11 +277,31 @@ body::after {
   color: #ffffff;
   font-size: 15px;
   line-height: 1.2;
-  caret-color: #ffffff;
+  caret-color: transparent;
   padding: 0;
+  margin-left: 0;
 }
 
-/* scrollbars */
+#command-input::selection {
+  background: rgba(255, 255, 255, 0.18);
+  color: #ffffff;
+}
+
+#prompt-line::after {
+  content: "";
+  display: inline-block;
+  width: 10px;
+  height: 18px;
+  background: #f5f5f5;
+  margin-left: 2px;
+  animation: blockBlink 1s steps(1, end) infinite;
+  vertical-align: middle;
+}
+
+#command-input:not(:focus) + * {
+  display: none;
+}
+
 #terminal-output::-webkit-scrollbar {
   width: 8px;
 }
@@ -299,11 +311,22 @@ body::after {
 }
 
 #terminal-output::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.16);
   border-radius: 999px;
 }
 
-/* smaller screens / ipad */
+@keyframes blockBlink {
+  0%,
+  49% {
+    opacity: 1;
+  }
+
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+
 @media (max-width: 1100px) {
   #app {
     padding: 10px;
@@ -322,6 +345,11 @@ body::after {
   #prompt-label,
   #command-input {
     font-size: 14px;
+  }
+
+  #prompt-line::after {
+    width: 9px;
+    height: 16px;
   }
 
   .center-panel {
