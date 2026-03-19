@@ -11,8 +11,14 @@ const state = {
   gateUnlocked: false,
   currentPath: "~",
   user: "spire",
-  host: "v17"
+  host: "v17",
+  history: [],
+  historyIndex: -1
 };
+
+/* =========================
+   COMMANDS
+   ========================= */
 
 const commandMap = {
   help: () => {
@@ -38,13 +44,10 @@ const commandMap = {
   about: () => {
     addSystemLine("SPIRENET V17");
     addSystemLine("Command-driven shell interface.");
-    addSystemLine("Boot layer, access gate, and terminal core online.");
   },
 
   status: () => {
     addSystemLine("SYSTEM STATUS");
-    addSystemLine("Boot sequence: COMPLETE");
-    addSystemLine("USB gate: AUTHORIZED");
     addSystemLine("Link: STABLE");
     addSystemLine("Shell: ACTIVE");
   },
@@ -70,15 +73,6 @@ const commandMap = {
     } else if (state.currentPath === "~/home") {
       addSystemLine("notes");
       addSystemLine("users");
-    } else if (state.currentPath === "~/logs") {
-      addSystemLine("boot.log");
-      addSystemLine("auth.log");
-    } else if (state.currentPath === "~/sys") {
-      addSystemLine("kernel");
-      addSystemLine("drivers");
-    } else if (state.currentPath === "~/vault") {
-      addSystemLine("archive");
-      addSystemLine("sealed");
     } else {
       addSystemLine("Directory empty.");
     }
@@ -93,10 +87,9 @@ const commandMap = {
   }
 };
 
-function setPrompt() {
-  const promptLabel = document.getElementById("prompt-label");
-  promptLabel.textContent = `${state.user}@${state.host}:${state.currentPath}$`;
-}
+/* =========================
+   OUTPUT HELPERS
+   ========================= */
 
 function addLine(text = "", className = "line") {
   const line = document.createElement("div");
@@ -107,181 +100,183 @@ function addLine(text = "", className = "line") {
 }
 
 function addSystemLine(text = "") {
-  addLine(text, "line");
+  addLine(text, "line system");
 }
 
 function addUserLine(text = "") {
-  addLine(`${state.user}@${state.host}:${state.currentPath}$ ${text}`, "line");
+  const line = document.createElement("div");
+  line.className = "line user";
+
+  const prompt = document.createElement("span");
+  prompt.className = "prompt-dim";
+  prompt.textContent = `${state.user}@${state.host}:${state.currentPath}$ `;
+
+  const command = document.createElement("span");
+  command.textContent = text;
+
+  line.appendChild(prompt);
+  line.appendChild(command);
+
+  terminalOutput.appendChild(line);
+  terminalOutput.scrollTop = terminalOutput.scrollHeight;
 }
 
-function showLayer(layerToShow) {
-  [bootOverlay, usbGate, terminalView].forEach((layer) => {
-    layer.classList.add("hidden");
-    layer.classList.remove("active");
+/* =========================
+   CORE LOGIC
+   ========================= */
+
+function setPrompt() {
+  document.getElementById("prompt-label").textContent =
+    `${state.user}@${state.host}:${state.currentPath}$`;
+}
+
+function parseCommand(rawInput) {
+  const input = rawInput.trim();
+  if (!input) return;
+
+  const [cmd, ...args] = input.split(" ");
+  const command = cmd.toLowerCase();
+
+  if (command === "echo") {
+    addSystemLine(args.join(" "));
+    return;
+  }
+
+  if (command === "cd") {
+    handleCd(args);
+    return;
+  }
+
+  const action = commandMap[command];
+
+  if (action) {
+    action(args);
+  } else {
+    addSystemLine(`Command not found: ${cmd}`);
+  }
+}
+
+function handleCd(args) {
+  const target = args[0];
+
+  if (!target || target === "~") {
+    state.currentPath = "~";
+  } else if (target === "home") {
+    state.currentPath = "~/home";
+  } else {
+    addSystemLine(`cd: no such file or directory: ${target}`);
+    return;
+  }
+
+  setPrompt();
+}
+
+/* =========================
+   BOOT / GATE
+   ========================= */
+
+function showLayer(layer) {
+  [bootOverlay, usbGate, terminalView].forEach((l) => {
+    l.classList.add("hidden");
+    l.classList.remove("active");
   });
 
-  layerToShow.classList.remove("hidden");
-  layerToShow.classList.add("active");
-}
-
-function focusCommandInput() {
-  setTimeout(() => {
-    commandInput.focus();
-    commandInput.setSelectionRange(
-      commandInput.value.length,
-      commandInput.value.length
-    );
-  }, 30);
+  layer.classList.remove("hidden");
+  layer.classList.add("active");
 }
 
 function bootSequence() {
   showLayer(bootOverlay);
 
   setTimeout(() => {
-    const bootLine = bootOverlay.querySelector(".boot-line");
-    if (bootLine) bootLine.textContent = "Loading authentication layer...";
-  }, 900);
-
-  setTimeout(() => {
-    state.bootComplete = true;
     showLayer(usbGate);
-  }, 1800);
+  }, 1500);
 }
 
 function unlockGate() {
-  state.gateUnlocked = true;
   showLayer(terminalView);
   setPrompt();
   terminalOutput.innerHTML = "";
+
   addSystemLine("SPIRENET V17 SHELL");
   addSystemLine("Authorization accepted.");
   addSystemLine('Type "help" to view commands.');
   addSystemLine("");
-  focusCommandInput();
-}
 
-function parseCommand(rawInput) {
-  const input = rawInput.trim();
-
-  if (!input) {
-    addSystemLine("");
-    return;
-  }
-
-  const [baseCommand, ...args] = input.split(" ");
-  const cmd = baseCommand.toLowerCase();
-
-  if (cmd === "echo") {
-    addSystemLine(args.join(" "));
-    return;
-  }
-
-  if (cmd === "cd") {
-    handleCd(args);
-    return;
-  }
-
-  const action = commandMap[cmd];
-
-  if (action) {
-    action(args);
-  } else {
-    addSystemLine(`Command not found: ${baseCommand}`);
-  }
-}
-
-function handleCd(args) {
-  const target = (args[0] || "").trim();
-
-  if (!target || target === "~") {
-    state.currentPath = "~";
-    setPrompt();
-    return;
-  }
-
-  if (target === "..") {
-    if (state.currentPath !== "~") {
-      const parts = state.currentPath.split("/");
-      parts.pop();
-      state.currentPath = parts.length === 1 ? "~" : parts.join("/");
-    }
-    setPrompt();
-    return;
-  }
-
-  const allowedFromRoot = ["home", "logs", "sys", "vault"];
-  const allowedNested = {
-    "~/home": ["notes", "users"],
-    "~/logs": [],
-    "~/sys": ["kernel", "drivers"],
-    "~/vault": ["archive", "sealed"]
-  };
-
-  if (state.currentPath === "~") {
-    if (allowedFromRoot.includes(target)) {
-      state.currentPath = `~/${target}`;
-      setPrompt();
-    } else {
-      addSystemLine(`cd: no such file or directory: ${target}`);
-    }
-    return;
-  }
-
-  const nextAllowed = allowedNested[state.currentPath] || [];
-  if (nextAllowed.includes(target)) {
-    state.currentPath = `${state.currentPath}/${target}`;
-    setPrompt();
-  } else {
-    addSystemLine(`cd: no such file or directory: ${target}`);
-  }
+  commandInput.focus();
 }
 
 function runRebootSequence() {
-  state.bootComplete = false;
-  state.gateUnlocked = false;
   state.currentPath = "~";
   setPrompt();
   commandInput.value = "";
-  showLayer(bootOverlay);
-
-  const bootLine = bootOverlay.querySelector(".boot-line");
-  if (bootLine) bootLine.textContent = "Reinitializing shell...";
-
-  setTimeout(() => {
-    if (bootLine) bootLine.textContent = "Loading authentication layer...";
-  }, 900);
-
-  setTimeout(() => {
-    state.bootComplete = true;
-    showLayer(usbGate);
-  }, 1800);
+  bootSequence();
 }
 
-usbEnterBtn.addEventListener("click", () => {
-  unlockGate();
-});
+/* =========================
+   EVENTS
+   ========================= */
 
-terminalForm.addEventListener("submit", (event) => {
-  event.preventDefault();
+usbEnterBtn.addEventListener("click", unlockGate);
 
-  const rawInput = commandInput.value;
-  addUserLine(rawInput);
-  parseCommand(rawInput);
+terminalForm.addEventListener("submit", (e) => {
+  e.preventDefault();
+
+  const input = commandInput.value;
+
+  if (!input.trim()) return;
+
+  // history
+  state.history.push(input);
+  state.historyIndex = state.history.length;
+
+  addUserLine(input);
   commandInput.value = "";
-  focusCommandInput();
+
+  // slight delay (realism)
+  setTimeout(() => {
+    parseCommand(input);
+  }, 60);
 });
 
-terminalView.addEventListener("click", () => {
-  focusCommandInput();
-});
+/* =========================
+   HISTORY NAVIGATION
+   ========================= */
 
-document.addEventListener("keydown", (event) => {
+document.addEventListener("keydown", (e) => {
   if (!state.gateUnlocked) return;
 
-  const tag = document.activeElement ? document.activeElement.tagName : "";
-  if (tag !== "INPUT" && !event.metaKey && !event.ctrlKey && !event.altKey) {
-    commandInput.focus();
+  if (e.key === "ArrowUp") {
+    e.preventDefault();
+    if (state.historyIndex > 0) {
+      state.historyIndex--;
+      commandInput.value = state.history[state.historyIndex];
+    }
+  }
+
+  if (e.key === "ArrowDown") {
+    e.preventDefault();
+    if (state.historyIndex < state.history.length - 1) {
+      state.historyIndex++;
+      commandInput.value = state.history[state.historyIndex];
+    } else {
+      state.historyIndex = state.history.length;
+      commandInput.value = "";
+    }
   }
 });
+
+/* =========================
+   CURSOR BLINK (BLOCK FEEL)
+   ========================= */
+
+let cursorVisible = true;
+
+setInterval(() => {
+  commandInput.style.opacity = cursorVisible ? "1" : "0.85";
+  cursorVisible = !cursorVisible;
+}, 500);
+
+/* ========================= */
 
 bootSequence();
