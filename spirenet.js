@@ -14,37 +14,123 @@ const state = {
   host: "v17",
   history: [],
   historyIndex: 0,
+  deeperUnlocked: false,
+  rootGranted: false,
   directories: {
     "~": ["home", "logs", "sys", "vault"],
     "~/home": ["notes", "users"],
     "~/logs": ["boot.log", "auth.log"],
     "~/sys": ["kernel", "drivers"],
     "~/vault": ["archive", "sealed"],
-    "~/home/notes": [],
-    "~/home/users": [],
-    "~/sys/kernel": [],
+    "~/home/notes": ["welcome.txt"],
+    "~/home/users": ["operator.txt"],
+    "~/sys/kernel": ["version.txt"],
     "~/sys/drivers": [],
-    "~/vault/archive": [],
+    "~/vault/archive": ["oldmemo.txt"],
     "~/vault/sealed": []
+  },
+  hiddenDirectories: {
+    "~/vault/sealed": ["blacksite", "keys"],
+    "~/vault/sealed/blacksite": ["entry.txt", "map.txt"],
+    "~/vault/sealed/keys": ["cipher.key", "root.token"]
+  },
+  fileMap: {
+    "~/logs/boot.log": [
+      "[00] kernel boot initiated",
+      "[01] shell frame mounted",
+      "[02] authentication layer prepared",
+      "[03] operator console attached",
+      "[04] interface stable"
+    ],
+    "~/logs/auth.log": [
+      "[AUTH] key handshake accepted",
+      "[AUTH] gate status: unlocked",
+      "[AUTH] operator session active"
+    ],
+    "~/home/notes/welcome.txt": [
+      "Welcome to SpireNet.",
+      "Type help to view available commands.",
+      "Some areas may require elevated clearance."
+    ],
+    "~/home/users/operator.txt": [
+      "operator: spire",
+      "clearance: standard",
+      "root: false"
+    ],
+    "~/sys/kernel/version.txt": [
+      "kernel.name=spire.core",
+      "kernel.version=17.4.2-shell",
+      "profile=monochrome_terminal"
+    ],
+    "~/vault/archive/oldmemo.txt": [
+      "Memo:",
+      "Archive remains readable.",
+      "Sealed areas require separate authorization."
+    ],
+    "~/vault/sealed/blacksite/entry.txt": [
+      "BLACKSITE ENTRY",
+      "This area was sealed after the secondary breach.",
+      "Access remains restricted to elevated users."
+    ],
+    "~/vault/sealed/blacksite/map.txt": [
+      "[NORTH] relay",
+      "[EAST] storage",
+      "[SOUTH] null chamber",
+      "[WEST] service descent"
+    ],
+    "~/vault/sealed/keys/cipher.key": [
+      "CIPHER KEY",
+      "VX-11 / ECHO / 7741",
+      "Use decrypt [target] where applicable."
+    ],
+    "~/vault/sealed/keys/root.token": [
+      "ROOT TOKEN",
+      "token.id=spire.root.override",
+      "status=inactive until grant root"
+    ]
   }
 };
+
+const rootCommands = [
+  "help",
+  "clear",
+  "about",
+  "status",
+  "whoami",
+  "version",
+  "echo",
+  "date",
+  "ls",
+  "cd",
+  "pwd",
+  "cat",
+  "reboot",
+  "scan",
+  "unlock",
+  "grant",
+  "decrypt"
+];
 
 const commandMap = {
   help: () => {
     addSystemLine("Available commands:");
-    addSystemLine("help       - Show command list");
-    addSystemLine("clear      - Clear terminal output");
-    addSystemLine("about      - Show system info");
-    addSystemLine("status     - Show link/system status");
-    addSystemLine("whoami     - Show active user");
-    addSystemLine("version    - Show build version");
-    addSystemLine("echo text  - Repeat text");
-    addSystemLine("date       - Show local date/time");
-    addSystemLine("ls         - List directories");
-    addSystemLine("cd [name]  - Change directory");
-    addSystemLine("pwd        - Show current path");
-    addSystemLine("cat [file] - Read a file");
-    addSystemLine("reboot     - Restart interface");
+    addSystemLine("help          - Show command list");
+    addSystemLine("clear         - Clear terminal output");
+    addSystemLine("about         - Show system info");
+    addSystemLine("status        - Show link/system status");
+    addSystemLine("whoami        - Show active user");
+    addSystemLine("version       - Show build version");
+    addSystemLine("echo text     - Repeat text");
+    addSystemLine("date          - Show local date/time");
+    addSystemLine("ls            - List directories");
+    addSystemLine("cd [name]     - Change directory");
+    addSystemLine("pwd           - Show current path");
+    addSystemLine("cat [file]    - Read a file");
+    addSystemLine("scan          - Scan current area");
+    addSystemLine("unlock sealed - Reveal sealed structure");
+    addSystemLine("grant root    - Request root elevation");
+    addSystemLine("decrypt file  - Decrypt supported target");
+    addSystemLine("reboot        - Restart interface");
   },
 
   clear: () => {
@@ -55,18 +141,21 @@ const commandMap = {
     addSystemLine("SPIRENET V17");
     addSystemLine("Command-driven shell interface.");
     addSystemLine("Monochrome terminal profile active.");
+    addSystemLine("Deeper system access supported.");
   },
 
   status: () => {
     addSystemLine("SYSTEM STATUS");
     addSystemLine("Boot sequence: COMPLETE");
     addSystemLine("USB gate: AUTHORIZED");
+    addSystemLine(`Sealed layer: ${state.deeperUnlocked ? "REVEALED" : "HIDDEN"}`);
+    addSystemLine(`Root access: ${state.rootGranted ? "GRANTED" : "DENIED"}`);
     addSystemLine("Link: STABLE");
     addSystemLine("Shell: ACTIVE");
   },
 
   whoami: () => {
-    addSystemLine(state.user);
+    addSystemLine(state.rootGranted ? `${state.user} [root]` : state.user);
   },
 
   version: () => {
@@ -78,12 +167,11 @@ const commandMap = {
   },
 
   ls: () => {
-    const items = state.directories[state.currentPath] || [];
+    const items = getVisibleItemsForPath(state.currentPath);
     if (!items.length) {
       addSystemLine("Directory empty.");
       return;
     }
-
     items.forEach((item) => addSystemLine(item));
   },
 
@@ -93,6 +181,10 @@ const commandMap = {
 
   reboot: () => {
     runRebootSequence();
+  },
+
+  scan: () => {
+    handleScan();
   }
 };
 
@@ -190,13 +282,33 @@ function unlockGate() {
 function runRebootSequence() {
   state.currentPath = "~";
   state.historyIndex = state.history.length;
+  state.deeperUnlocked = false;
+  state.rootGranted = false;
   commandInput.value = "";
   setPrompt();
   bootSequence();
 }
 
-function isDirectory(path) {
-  return Object.prototype.hasOwnProperty.call(state.directories, path);
+function pathExists(path) {
+  return (
+    Object.prototype.hasOwnProperty.call(state.directories, path) ||
+    (state.deeperUnlocked &&
+      Object.prototype.hasOwnProperty.call(state.hiddenDirectories, path))
+  );
+}
+
+function getVisibleItemsForPath(path) {
+  const baseItems = state.directories[path] ? [...state.directories[path]] : [];
+  const hiddenItems =
+    state.deeperUnlocked && state.hiddenDirectories[path]
+      ? [...state.hiddenDirectories[path]]
+      : [];
+
+  return [...baseItems, ...hiddenItems];
+}
+
+function isDirectoryTarget(path) {
+  return pathExists(path);
 }
 
 function resolveCdTarget(target) {
@@ -224,7 +336,7 @@ function handleCd(args) {
   const target = (args[0] || "").trim();
   const nextPath = resolveCdTarget(target);
 
-  if (!isDirectory(nextPath)) {
+  if (!isDirectoryTarget(nextPath)) {
     addSystemLine(`cd: no such file or directory: ${target || ""}`.trim());
     return;
   }
@@ -241,42 +353,156 @@ function handleCat(args) {
     return;
   }
 
-  const fileMap = {
-    "~/logs/boot.log": [
-      "[00] kernel boot initiated",
-      "[01] shell frame mounted",
-      "[02] authentication layer prepared",
-      "[03] interface stable"
-    ],
-    "~/logs/auth.log": [
-      "[AUTH] key handshake accepted",
-      "[AUTH] gate status: unlocked",
-      "[AUTH] operator session active"
-    ]
-  };
-
   let fullPath = "";
-
-  if (state.currentPath === "~") {
+  if (target.startsWith("~/")) {
+    fullPath = target;
+  } else if (state.currentPath === "~") {
     fullPath = `~/${target}`;
   } else {
     fullPath = `${state.currentPath}/${target}`;
   }
 
-  if (!fileMap[fullPath]) {
+  if (!state.fileMap[fullPath]) {
     addSystemLine(`cat: ${target}: No such file`);
     return;
   }
 
-  fileMap[fullPath].forEach((line) => addSystemLine(line));
+  if (fullPath.includes("/sealed/") && !state.deeperUnlocked) {
+    addSystemLine("cat: access denied");
+    return;
+  }
+
+  if (fullPath.endsWith("root.token") && !state.rootGranted) {
+    addSystemLine("cat: root elevation required");
+    return;
+  }
+
+  state.fileMap[fullPath].forEach((line) => addSystemLine(line));
+}
+
+function handleScan() {
+  addSystemLine(`Scanning ${state.currentPath} ...`);
+
+  if (state.currentPath === "~") {
+    addSystemLine("4 visible nodes detected.");
+    addSystemLine(state.deeperUnlocked ? "1 hidden branch previously revealed." : "No hidden branches visible.");
+    return;
+  }
+
+  if (state.currentPath === "~/vault") {
+    addSystemLine("Archive integrity: stable.");
+    addSystemLine(state.deeperUnlocked ? "Sealed branch signature: visible." : "Residual sealed signature detected.");
+    return;
+  }
+
+  if (state.currentPath === "~/vault/sealed") {
+    addSystemLine("Sealed layer open.");
+    addSystemLine("2 restricted branches detected.");
+    return;
+  }
+
+  if (state.currentPath === "~/vault/sealed/keys") {
+    addSystemLine("Key material detected.");
+    addSystemLine(state.rootGranted ? "Root token readable." : "Root token locked.");
+    return;
+  }
+
+  addSystemLine("No anomaly detected.");
+}
+
+function handleUnlock(args) {
+  const target = (args[0] || "").trim().toLowerCase();
+
+  if (!target) {
+    addSystemLine("unlock: missing target");
+    return;
+  }
+
+  if (target !== "sealed") {
+    addSystemLine(`unlock: unsupported target: ${target}`);
+    return;
+  }
+
+  if (state.currentPath !== "~/vault") {
+    addSystemLine("unlock: sealed target only available from ~/vault");
+    return;
+  }
+
+  if (state.deeperUnlocked) {
+    addSystemLine("sealed structure already revealed");
+    return;
+  }
+
+  state.deeperUnlocked = true;
+  addSystemLine("sealed structure revealed");
+  addSystemLine("new branch available: sealed");
+}
+
+function handleGrant(args) {
+  const target = (args[0] || "").trim().toLowerCase();
+
+  if (!target) {
+    addSystemLine("grant: missing target");
+    return;
+  }
+
+  if (target !== "root") {
+    addSystemLine(`grant: unsupported target: ${target}`);
+    return;
+  }
+
+  if (state.currentPath !== "~/vault/sealed/keys") {
+    addSystemLine("grant: root request only available from ~/vault/sealed/keys");
+    return;
+  }
+
+  if (!state.deeperUnlocked) {
+    addSystemLine("grant: sealed layer not available");
+    return;
+  }
+
+  if (state.rootGranted) {
+    addSystemLine("root already granted");
+    return;
+  }
+
+  state.rootGranted = true;
+  addSystemLine("root elevation granted");
+  addSystemLine("sensitive tokens unlocked");
+}
+
+function handleDecrypt(args) {
+  const target = (args[0] || "").trim();
+
+  if (!target) {
+    addSystemLine("decrypt: missing target");
+    return;
+  }
+
+  if (target !== "root.token") {
+    addSystemLine(`decrypt: unsupported target: ${target}`);
+    return;
+  }
+
+  if (state.currentPath !== "~/vault/sealed/keys") {
+    addSystemLine("decrypt: target only available from ~/vault/sealed/keys");
+    return;
+  }
+
+  if (!state.rootGranted) {
+    addSystemLine("decrypt: root elevation required");
+    return;
+  }
+
+  addSystemLine("decrypting root.token ...");
+  addSystemLine("token.signature = SPN-ROOT-77");
+  addSystemLine("override.window = open");
+  addSystemLine("clearance.profile = elevated");
 }
 
 function parseCommand(rawInput) {
   const input = rawInput.trim();
-
-  if (!input) {
-    return;
-  }
+  if (!input) return;
 
   const [baseCommand, ...args] = input.split(" ");
   const cmd = baseCommand.toLowerCase();
@@ -293,6 +519,21 @@ function parseCommand(rawInput) {
 
   if (cmd === "cat") {
     handleCat(args);
+    return;
+  }
+
+  if (cmd === "unlock") {
+    handleUnlock(args);
+    return;
+  }
+
+  if (cmd === "grant") {
+    handleGrant(args);
+    return;
+  }
+
+  if (cmd === "decrypt") {
+    handleDecrypt(args);
     return;
   }
 
@@ -388,32 +629,14 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Tab") {
     event.preventDefault();
 
-    const value = commandInput.value.trim();
-    const tokens = value.split(" ").filter(Boolean);
+    const raw = commandInput.value;
+    const tokens = raw.split(" ").filter(Boolean);
 
     if (!tokens.length) return;
 
-    const lastToken = tokens[tokens.length - 1];
-    const command = tokens[0].toLowerCase();
-
-    const rootCommands = [
-      "help",
-      "clear",
-      "about",
-      "status",
-      "whoami",
-      "version",
-      "echo",
-      "date",
-      "ls",
-      "cd",
-      "pwd",
-      "cat",
-      "reboot"
-    ];
-
     if (tokens.length === 1) {
-      const matches = rootCommands.filter((item) => item.startsWith(lastToken));
+      const partial = tokens[0].toLowerCase();
+      const matches = rootCommands.filter((item) => item.startsWith(partial));
       if (matches.length === 1) {
         commandInput.value = matches[0];
         focusCommandInput();
@@ -421,9 +644,42 @@ document.addEventListener("keydown", (event) => {
       return;
     }
 
+    const command = tokens[0].toLowerCase();
+    const partial = tokens[tokens.length - 1];
+    const items = getVisibleItemsForPath(state.currentPath);
+
     if (command === "cd" || command === "cat") {
-      const items = state.directories[state.currentPath] || [];
-      const matches = items.filter((item) => item.startsWith(lastToken));
+      const matches = items.filter((item) => item.startsWith(partial));
+      if (matches.length === 1) {
+        tokens[tokens.length - 1] = matches[0];
+        commandInput.value = tokens.join(" ");
+        focusCommandInput();
+      }
+      return;
+    }
+
+    if (command === "unlock") {
+      const matches = ["sealed"].filter((item) => item.startsWith(partial));
+      if (matches.length === 1) {
+        tokens[tokens.length - 1] = matches[0];
+        commandInput.value = tokens.join(" ");
+        focusCommandInput();
+      }
+      return;
+    }
+
+    if (command === "grant") {
+      const matches = ["root"].filter((item) => item.startsWith(partial));
+      if (matches.length === 1) {
+        tokens[tokens.length - 1] = matches[0];
+        commandInput.value = tokens.join(" ");
+        focusCommandInput();
+      }
+      return;
+    }
+
+    if (command === "decrypt") {
+      const matches = ["root.token"].filter((item) => item.startsWith(partial));
       if (matches.length === 1) {
         tokens[tokens.length - 1] = matches[0];
         commandInput.value = tokens.join(" ");
