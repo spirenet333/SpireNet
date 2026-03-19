@@ -16,10 +16,9 @@ body {
   margin: 0;
 }
 
+/* 🔥 THIS IS THE IMPORTANT PART */
 #input {
-  position: fixed;
-  left: -9999px;
-  top: 0;
+  position: absolute;
   opacity: 0;
   pointer-events: none;
 }
